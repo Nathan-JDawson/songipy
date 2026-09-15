@@ -15,18 +15,27 @@ DEFAULT_REDIRECT_URI = "http://127.0.0.1:8080/callback"
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_TOKEN_CACHE_PATH = str(_REPO_ROOT / ".tokens.json")
 
-MIN_ALBUMS = 2
 MIN_TRACKS_PER_ALBUM = 3
 MIN_MS_PLAYED = 30_000
 
 MIN_PLAYLIST_TRACKS = 50
-ALBUM_WINDOW_DAYS = 30
 MAX_RATE_LIMIT_RETRIES = 5
 RATE_LIMIT_MAX_BACKOFF = 60
 
+# (start_days_ago, end_days_ago, label); window = [now - start, now - end] inclusive, UTC.
+ALBUM_WINDOWS: tuple[tuple[int, int, str], ...] = (
+    (7, 0, "Last 7 Days"),
+    (30, 0, "Last 30 Days"),
+    (14, 8, "Days 8-14"),
+    (90, 0, "Last 90 Days"),
+)
+
+# Optional root prefix for all generated playlists; "" disables it entirely.
+PLAYLIST_ROOT = "Songipy"
+
 PLAYLIST_NAME_FORMAT: dict[str, str] = {
-    "genre": "Genre: {label} — {timestamp}",
-    "binge": "Binge: {label} — {timestamp}",
+    "genre": "Genres/{label} — {timestamp}",
+    "albums": "Albums/{label} — {timestamp}",
 }
 
 
@@ -36,13 +45,20 @@ def utc_timestamp() -> str:
 
 
 def make_playlist_name(kind: str, label: str) -> str:
-    """Build a playlist name for ``kind`` (``"genre"`` or ``"binge"``)."""
+    """Build a folder-style playlist name for ``kind`` (``"genre"`` or ``"albums"``).
+
+    The name is shaped ``<root>/<KindFolder>/<label> — <timestamp>`` where
+    ``<root>`` is ``PLAYLIST_ROOT`` (omitted entirely when it is empty).
+    """
     try:
         template = PLAYLIST_NAME_FORMAT[kind]
     except KeyError:
         known = ", ".join(sorted(PLAYLIST_NAME_FORMAT))
         raise ValueError(f"unknown playlist kind {kind!r}; expected one of: {known}") from None
-    return template.format(label=label, timestamp=utc_timestamp())
+    base = template.format(label=label, timestamp=utc_timestamp())
+    if PLAYLIST_ROOT:
+        return f"{PLAYLIST_ROOT}/{base}"
+    return base
 
 
 @dataclass(frozen=True)

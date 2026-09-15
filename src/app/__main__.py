@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import argparse
 import logging
-from datetime import UTC, datetime, timedelta
+from dataclasses import replace
+from datetime import UTC, datetime
 
-from app import auth, binges, classify, config, import_history, library
+from app import albums, auth, classify, config, import_history, library
 from app import db as db_module
 from app import playlists as playlists_module
 from app import poll as poll_module
@@ -109,37 +110,38 @@ def _cmd_sync_albums(args: argparse.Namespace) -> int:
     database = _open_db()
     listens = db_module.all_listens_ordered(database)
 
-    cutoff = (datetime.now(UTC) - timedelta(days=config.ALBUM_WINDOW_DAYS)).isoformat()
-    recent = binges.filter_since(listens, cutoff)
+    windows = [albums.WindowSpec(*window) for window in config.ALBUM_WINDOWS]
+    plans = albums.group_albums_by_window(listens, windows, config.MIN_TRACKS_PER_ALBUM)
 
-    for listen in recent:
-        listen["album_id"] = listen.get("album_name") or listen.get("track_uri")
-
-    sessions = binges.detect_album_sessions(recent, config.MIN_TRACKS_PER_ALBUM, config.MIN_ALBUMS)
-    sessions.reverse()
-    if args.top is not None:
-        sessions = sessions[: args.top]
-
-    if not sessions:
-        print("No binge sessions found.")
+    if all(not plan.albums for plan in plans):
+        print("No albums found in any window.")
         return 0
 
-    album_to_track: dict[str, str] = {}
-    album_to_name: dict[str, str] = {}
-    for listen in recent:
-        key = listen["album_id"]
-        album_to_track.setdefault(key, listen["track_uri"])
-        album_to_name.setdefault(key, listen.get("album_name") or key)
+    if args.top is not None:
+        limit = max(0, args.top)
+        plans = [replace(plan, albums=plan.albums[:limit]) for plan in plans]
 
     if args.dry_run:
-        for session in sessions:
-            names = ", ".join(album_to_name.get(key, key) for key in session)
-            print(f"[dry-run] Binge session ({len(session)} albums): {names}")
+        for plan in plans:
+            if not plan.albums:
+                continue
+            names = ", ".join(album.name for album in plan.albums)
+            name = config.make_playlist_name("albums", plan.spec.label)
+            count = len(plan.albums)
+            plural = "" if count == 1 else "s"
+            print(f"[dry-run] {name} ({count} album{plural}): {names}")
         return 0
 
     spotify = _get_spotify(auth.SCOPES_ALL)
 
-    all_keys = list(dict.fromkeys(key for session in sessions for key in session))
+    all_keys = list(dict.fromkeys(album.key for plan in plans for album in plan.albums))
+    album_to_track: dict[str, str] = {}
+    album_to_name: dict[str, str] = {}
+    for plan in plans:
+        for album in plan.albums:
+            album_to_track.setdefault(album.key, album.track_uri)
+            album_to_name.setdefault(album.key, album.name)
+
     uris = [album_to_track[key] for key in all_keys if album_to_track.get(key)]
     uri_to_album = library.resolve_album_ids(spotify, uris)
     album_id_cache: dict[str, str] = {
@@ -148,23 +150,29 @@ def _cmd_sync_albums(args: argparse.Namespace) -> int:
         if album_to_track.get(key) in uri_to_album
     }
 
-    for session in sessions:
+    for plan in plans:
         track_uris: list[str] = []
-        for key in session:
-            album_id = album_id_cache.get(key)
+        for album in plan.albums:
+            album_id = album_id_cache.get(album.key)
             if album_id is None:
-                logger.warning("Could not resolve album id for %r; skipping", key)
+                logger.warning(
+                    "Could not resolve album id for %r (%s); skipping",
+                    album.key,
+                    album_to_name.get(album.key, album.key),
+                )
                 continue
             track_uris.extend(library.iter_album_tracks(spotify, album_id))
 
         if not track_uris:
-            logger.warning("Skipping binge session with no resolvable tracks: %r", session)
+            logger.warning("Skipping window with no resolvable tracks: %r", plan.spec.label)
             continue
 
-        name = config.make_playlist_name("binge", f"{len(session)} albums")
+        name = config.make_playlist_name("albums", plan.spec.label)
         playlist_id = playlists_module.create_playlist(spotify, name)
         playlists_module.add_tracks(spotify, playlist_id, track_uris)
-        print(f"{name} ({len(track_uris)} tracks)")
+        count = len(plan.albums)
+        plural = "" if count == 1 else "s"
+        print(f"{name} ({count} album{plural})")
     return 0
 
 
@@ -179,7 +187,7 @@ def _add_shared_options(parser: argparse.ArgumentParser) -> None:
         "--top",
         type=int,
         default=argparse.SUPPRESS,
-        help="limit saved tracks (sync-genres) or sessions (sync-albums)",
+        help="limit saved tracks (sync-genres) or albums per window (sync-albums)",
     )
 
 
@@ -197,7 +205,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--top",
         type=int,
         default=None,
-        help="limit saved tracks (sync-genres) or sessions (sync-albums)",
+        help="limit saved tracks (sync-genres) or albums per window (sync-albums)",
     )
 
     subparsers = parser.add_subparsers(dest="command", metavar="COMMAND")
@@ -218,7 +226,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     for name, handler, help_text in (
         ("sync-genres", _cmd_sync_genres, "create playlists per genre"),
-        ("sync-albums", _cmd_sync_albums, "create playlists per binge session"),
+        (
+            "sync-albums",
+            _cmd_sync_albums,
+            "create playlists of recently-listened albums per date range",
+        ),
     ):
         sub = subparsers.add_parser(name, help=help_text)
         _add_shared_options(sub)
