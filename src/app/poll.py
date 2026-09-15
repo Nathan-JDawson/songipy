@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from app import api
 from app.db import Database, upsert_listens
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,6 @@ def item_to_row(item: dict) -> dict[str, Any]:
 
 def poll_recent(spotify: Any, db: Database, limit: int = 50) -> int:
     """Fetch the most recent plays and upsert them. Returns inserted count."""
-    response = spotify.current_user_recently_played(limit=limit)
+    response = api.call_with_retry(spotify.current_user_recently_played, limit=limit)
     rows = [item_to_row(item) for item in response.get("items", [])]
     return upsert_listens(db, rows)

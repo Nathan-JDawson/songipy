@@ -1,4 +1,4 @@
-from app.classify import build_track_genres, normalize_genre
+from app.classify import build_track_genres, keep_min_genres, normalize_genre
 
 
 def test_normalize_genre_lowercases_and_strips() -> None:
@@ -31,3 +31,16 @@ def test_tracks_without_genres_are_ignored() -> None:
 def test_tracks_without_uri_are_skipped() -> None:
     tracks = [{"uri": None, "artists": [{"id": "a1"}]}]
     assert build_track_genres(tracks, {"a1": {"rock"}}) == {}
+
+
+def test_keep_min_genres_drops_below_threshold() -> None:
+    mapping = {"rock": ["a", "b"], "pop": ["a"], "jazz": ["a", "b", "c"]}
+    assert keep_min_genres(mapping, 2) == {"rock": ["a", "b"], "jazz": ["a", "b", "c"]}
+
+
+def test_keep_min_genres_keeps_equals_threshold() -> None:
+    assert keep_min_genres({"pop": ["a", "b"]}, 2) == {"pop": ["a", "b"]}
+
+
+def test_keep_min_genres_empty_input() -> None:
+    assert keep_min_genres({}, 5) == {}

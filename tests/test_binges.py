@@ -1,4 +1,4 @@
-from app.binges import detect_album_sessions
+from app.binges import detect_album_sessions, filter_since
 
 
 def _listen(album_id: str, track_uri: str) -> dict:
@@ -41,3 +41,32 @@ def test_uncounted_run_breaks_a_session() -> None:
 
 def test_empty_input() -> None:
     assert detect_album_sessions([], 3, 2) == []
+
+
+def test_filter_since_keeps_strictly_newer() -> None:
+    listens = [
+        {"played_at": "2026-01-01T00:00:00Z"},
+        {"played_at": "2026-01-02T00:00:00Z"},
+        {"played_at": "2026-01-03T00:00:00Z"},
+    ]
+
+    result = filter_since(listens, "2026-01-02T00:00:00Z")
+
+    assert [listen["played_at"] for listen in result] == ["2026-01-03T00:00:00Z"]
+
+
+def test_filter_since_skips_missing_played_at() -> None:
+    listens = [{}, {"played_at": None}, {"played_at": "2026-01-03T00:00:00Z"}]
+
+    assert filter_since(listens, "2026-01-02T00:00:00Z") == [{"played_at": "2026-01-03T00:00:00Z"}]
+
+
+def test_filter_since_uses_string_ordering() -> None:
+    listens = [
+        {"played_at": "2025-09-09T23:59:59.999Z"},
+        {"played_at": "2025-09-10T00:00:00.001Z"},
+    ]
+
+    assert filter_since(listens, "2025-09-10T00:00:00.000Z") == [
+        {"played_at": "2025-09-10T00:00:00.001Z"}
+    ]

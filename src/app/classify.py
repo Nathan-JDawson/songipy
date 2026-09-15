@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from app import api
+
 logger = logging.getLogger(__name__)
 
 ARTIST_BATCH_SIZE = 50
@@ -53,9 +55,14 @@ def genre_playlist_map(spotify: Any, tracks: list[dict]) -> dict[str, list[str]]
     artists_genres: dict[str, set[str]] = {}
     for start in range(0, len(artist_ids), ARTIST_BATCH_SIZE):
         batch = artist_ids[start : start + ARTIST_BATCH_SIZE]
-        response = spotify.artists(batch)
+        response = api.call_with_retry(spotify.artists, batch)
         for artist in response.get("artists", []):
             if artist and artist.get("id"):
                 artists_genres[artist["id"]] = set(artist.get("genres", []))
 
     return build_track_genres(tracks, artists_genres)
+
+
+def keep_min_genres(mapping: dict[str, list[str]], min_tracks: int) -> dict[str, list[str]]:
+    """Return only the genres with at least ``min_tracks`` tracks."""
+    return {genre: tracks for genre, tracks in mapping.items() if len(tracks) >= min_tracks}

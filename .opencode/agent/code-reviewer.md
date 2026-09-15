@@ -1,7 +1,7 @@
 ---
 description: Reviews code for style and convention compliance and runs the test and lint suite. Use for code review and test/lint verification before finishing a task.
 mode: subagent
-model: openrouter/~deepseek/deepseek-pro-latest
+model: openrouter/deepseek/deepseek-v4.1-flash
 permission:
   edit: deny
   bash: allow

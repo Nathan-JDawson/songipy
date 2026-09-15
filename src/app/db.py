@@ -137,29 +137,49 @@ def create_schema(db: Database) -> None:
 
 def upsert_listens(db: Database, rows: list[dict[str, Any]]) -> int:
     """Insert rows, silently skipping duplicates. Returns inserted count."""
-    if not rows:
+    values: list[list[Any]] = []
+    for row in rows:
+        if not row.get("played_at") or not row.get("track_uri"):
+            logger.debug("skipping listen without played_at/track_uri: %r", row)
+            continue
+        values.append([row.get(column) for column in COLUMNS])
+
+    if not values:
         return 0
 
-    placeholders = ", ".join([db.placeholder] * len(COLUMNS))
+    conn = db.connect()
+    if db.backend == "postgresql":
+        return _upsert_postgres_bulk(conn, values)
+
     columns = ", ".join(COLUMNS)
+    placeholders = ", ".join([db.placeholder] * len(COLUMNS))
     sql = (
         f"INSERT INTO listens ({columns}) VALUES ({placeholders}) "
         "ON CONFLICT (played_at, track_uri) DO NOTHING"
     )
-
-    conn = db.connect()
-    inserted = 0
     with _cursor(conn) as cur:
-        for row in rows:
-            if not row.get("played_at") or not row.get("track_uri"):
-                logger.debug("skipping listen without played_at/track_uri: %r", row)
-                continue
-            values = [row.get(column) for column in COLUMNS]
-            cur.execute(sql, values)
-            if cur.rowcount and cur.rowcount > 0:
-                inserted += cur.rowcount
+        cur.executemany(sql, values)
+        inserted = cur.rowcount or 0
     conn.commit()
     return inserted
+
+
+def _upsert_postgres_bulk(conn: Any, values: list[list[Any]]) -> int:
+    """Bulk-load ``values`` into ``listens`` via a temporary staging table."""
+    staging = "_staging_listens"
+    columns = ", ".join(COLUMNS)
+    with conn.cursor() as cur:
+        cur.execute(f"CREATE TEMP TABLE {staging} (LIKE listens) ON COMMIT DROP")
+        with cur.copy(f"COPY {staging} ({columns}) FROM STDIN") as copy:
+            for row in values:
+                copy.write_row(row)
+        cur.execute(
+            f"INSERT INTO listens ({columns}) SELECT {columns} FROM {staging} "
+            "ON CONFLICT (played_at, track_uri) DO NOTHING"
+        )
+        inserted = cur.rowcount
+    conn.commit()
+    return inserted if inserted is not None else 0
 
 
 def latest_listens(db: Database, limit: int = 10) -> list[dict[str, Any]]:

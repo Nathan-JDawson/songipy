@@ -5,6 +5,19 @@ from __future__ import annotations
 from typing import Any
 
 
+def filter_since(listens: list[dict], cutoff: str) -> list[dict]:
+    """Return listens whose ``played_at`` is strictly after ``cutoff``.
+
+    ``played_at`` is an ISO-8601 string, so lexical comparison is sufficient.
+    Listens without a ``played_at`` value are skipped.
+    """
+    return [
+        listen
+        for listen in listens
+        if (played_at := listen.get("played_at")) and played_at > cutoff
+    ]
+
+
 def album_key(listen: dict) -> Any:
     """Return the identifier used to group a listen into an album run."""
     for key in ("album_id", "album_uri", "album_name"):

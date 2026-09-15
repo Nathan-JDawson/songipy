@@ -2,14 +2,14 @@
 name = "spotify-playlist-generator"
 version = "0.1.0"
 description = "Generate and sync Spotify playlists from your library and listening history."
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "spotipy",
     "python-dotenv",
     "psycopg[binary]",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
     "pytest",
     "ruff",
@@ -24,7 +24,7 @@ where = ["src"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from app import auth, binges, classify, config, import_history, library
 from app import db as db_module
@@ -84,12 +84,17 @@ def _cmd_sync_genres(args: argparse.Namespace) -> int:
     spotify = _get_spotify(auth.SCOPES_ALL)
     tracks = _saved_tracks(spotify, args.top)
     mapping = classify.genre_playlist_map(spotify, tracks)
+    kept = classify.keep_min_genres(mapping, config.MIN_PLAYLIST_TRACKS)
+    print(
+        f"skipped {len(mapping) - len(kept)} genres with fewer than "
+        f"{config.MIN_PLAYLIST_TRACKS} tracks"
+    )
 
-    if not mapping:
+    if not kept:
         print("No genres found for the saved tracks.")
         return 0
 
-    for genre, track_uris in sorted(mapping.items()):
+    for genre, track_uris in sorted(kept.items()):
         name = config.make_playlist_name("genre", genre)
         if args.dry_run:
             print(f"[dry-run] {name} ({len(track_uris)} tracks)")
@@ -103,10 +108,15 @@ def _cmd_sync_genres(args: argparse.Namespace) -> int:
 def _cmd_sync_albums(args: argparse.Namespace) -> int:
     database = _open_db()
     listens = db_module.all_listens_ordered(database)
-    for listen in listens:
+
+    cutoff = (datetime.now(UTC) - timedelta(days=config.ALBUM_WINDOW_DAYS)).isoformat()
+    recent = binges.filter_since(listens, cutoff)
+
+    for listen in recent:
         listen["album_id"] = listen.get("album_name") or listen.get("track_uri")
 
-    sessions = binges.detect_album_sessions(listens, config.MIN_TRACKS_PER_ALBUM, config.MIN_ALBUMS)
+    sessions = binges.detect_album_sessions(recent, config.MIN_TRACKS_PER_ALBUM, config.MIN_ALBUMS)
+    sessions.reverse()
     if args.top is not None:
         sessions = sessions[: args.top]
 
@@ -115,29 +125,43 @@ def _cmd_sync_albums(args: argparse.Namespace) -> int:
         return 0
 
     album_to_track: dict[str, str] = {}
-    for listen in listens:
+    album_to_name: dict[str, str] = {}
+    for listen in recent:
         key = listen["album_id"]
         album_to_track.setdefault(key, listen["track_uri"])
+        album_to_name.setdefault(key, listen.get("album_name") or key)
+
+    if args.dry_run:
+        for session in sessions:
+            names = ", ".join(album_to_name.get(key, key) for key in session)
+            print(f"[dry-run] Binge session ({len(session)} albums): {names}")
+        return 0
 
     spotify = _get_spotify(auth.SCOPES_ALL)
-    album_id_cache: dict[str, str] = {}
+
+    all_keys = list(dict.fromkeys(key for session in sessions for key in session))
+    uris = [album_to_track[key] for key in all_keys if album_to_track.get(key)]
+    uri_to_album = library.resolve_album_ids(spotify, uris)
+    album_id_cache: dict[str, str] = {
+        key: uri_to_album[album_to_track[key]]
+        for key in all_keys
+        if album_to_track.get(key) in uri_to_album
+    }
 
     for session in sessions:
         track_uris: list[str] = []
-        for album_key in session:
-            album_id = album_id_cache.get(album_key)
+        for key in session:
+            album_id = album_id_cache.get(key)
             if album_id is None:
-                track_uri = album_to_track.get(album_key)
-                if not track_uri:
-                    continue
-                album_id = spotify.track(track_uri)["album"]["id"]
-                album_id_cache[album_key] = album_id
+                logger.warning("Could not resolve album id for %r; skipping", key)
+                continue
             track_uris.extend(library.iter_album_tracks(spotify, album_id))
 
-        name = config.make_playlist_name("binge", f"{len(session)} albums")
-        if args.dry_run:
-            print(f"[dry-run] {name} ({len(track_uris)} tracks)")
+        if not track_uris:
+            logger.warning("Skipping binge session with no resolvable tracks: %r", session)
             continue
+
+        name = config.make_playlist_name("binge", f"{len(session)} albums")
         playlist_id = playlists_module.create_playlist(spotify, name)
         playlists_module.add_tracks(spotify, playlist_id, track_uris)
         print(f"{name} ({len(track_uris)} tracks)")

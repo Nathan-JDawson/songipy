@@ -11,13 +11,18 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-DEFAULT_REDIRECT_URI = "http://localhost:8080/callback"
+DEFAULT_REDIRECT_URI = "http://127.0.0.1:8080/callback"
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_TOKEN_CACHE_PATH = str(_REPO_ROOT / ".tokens.json")
 
 MIN_ALBUMS = 2
 MIN_TRACKS_PER_ALBUM = 3
 MIN_MS_PLAYED = 30_000
+
+MIN_PLAYLIST_TRACKS = 50
+ALBUM_WINDOW_DAYS = 30
+MAX_RATE_LIMIT_RETRIES = 5
+RATE_LIMIT_MAX_BACKOFF = 60
 
 PLAYLIST_NAME_FORMAT: dict[str, str] = {
     "genre": "Genre: {label} — {timestamp}",

@@ -4,13 +4,13 @@ Spotify playlist generator. Python 3.12, `src/` layout, package `app`.
 
 ## Commands (Windows / PowerShell)
 
-- Use the venv interpreter for everything (all deps live there): `.venv\Scripts\python.exe`
+- Use `uv` for everything — it manages the project venv, deps, and lockfile (Python 3.12 pinned via `.python-version`).
 - PowerShell 5.1 has no `&&`; chain with `;` and `if ($?) { ... }`.
-- Lint: `python -m ruff check src tests`
-- Format: `python -m ruff format src tests` (config: line-length 100, select `E,F,I,UP,B`)
-- Test: `python -m pytest -q`
-- Reinstall after dependency changes: `python -m pip install -e .`
-- Run: `python -m app <subcommand>` → `auth | import <path> | poll | recent [N] | sync-genres | sync-albums`; flags `--dry-run`, `--top N`.
+- Install/resync deps: `uv sync` (after editing `pyproject.toml` or `uv add <pkg>`); regenerates `uv.lock`.
+- Lint: `uv run ruff check src tests`
+- Format: `uv run ruff format src tests` (config: line-length 100, select `E,F,I,UP,B`)
+- Test: `uv run pytest -q`
+- Run: `uv run python -m app <subcommand>` → `auth | import <path> | poll | recent [N] | sync-genres | sync-albums`; flags `--dry-run`, `--top N`.
 
 ## Storage
 
@@ -34,3 +34,4 @@ Spotify playlist generator. Python 3.12, `src/` layout, package `app`.
 ## Subagents (opencode)
 
 - `project-planner` (planning, read-only), `build-worker` (implementation), `code-reviewer` (lint/test/review). Defined in `.opencode/agent/`.
+- Workflow rule: route planning → `project-planner`, implementation/edits → `build-worker`, review + test/lint verification → `code-reviewer`. The primary agent does not write project code directly.

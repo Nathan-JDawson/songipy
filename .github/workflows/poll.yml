@@ -11,16 +11,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.12"
 
       - name: Install package
-        run: pip install -e .
+        run: uv sync --locked --no-dev
 
       - name: Poll recently played
         env:
           SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
           SPOTIFY_REFRESH_TOKEN: ${{ secrets.SPOTIFY_REFRESH_TOKEN }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: python -m app poll
+        run: uv run python -m app poll
