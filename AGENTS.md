@@ -43,3 +43,4 @@ Spotify playlist generator. Python 3.12, `src/` layout, package `app`.
 
 - `project-planner` (planning, read-only), `build-worker` (implementation), `code-reviewer` (lint/test/review). Defined in `.opencode/agent/`.
 - Workflow rule: route planning → `project-planner`, implementation/edits → `build-worker`, review + test/lint verification → `code-reviewer`. The primary agent does not write project code directly.
+- **README rule**: update `README.md` in the same commit as any change to commands, env vars, behavior, or setup steps — the README must stay current.
