@@ -6,8 +6,9 @@ import argparse
 import logging
 from dataclasses import replace
 from datetime import UTC, datetime
+from pathlib import Path
 
-from app import albums, auth, classify, config, import_history, library
+from app import albums, api, auth, classify, config, folder_plan, folders, import_history, library
 from app import db as db_module
 from app import playlists as playlists_module
 from app import poll as poll_module
@@ -176,6 +177,152 @@ def _cmd_sync_albums(args: argparse.Namespace) -> int:
     return 0
 
 
+def _iter_user_playlists(spotify):
+    """Yield all of the user's playlists, following spotipy's paging."""
+    page = api.call_with_retry(spotify.current_user_playlists, limit=50)
+    while page is not None:
+        yield from page.get("items", [])
+        if not page.get("next"):
+            break
+        page = api.call_with_retry(spotify.next, page)
+
+
+def _default_chrome_profile_dir() -> str:
+    """Return the default dedicated Chrome profile path under the repo root."""
+    repo_root = Path(__file__).resolve().parents[2]
+    return str(repo_root / ".spotify-chrome-profile")
+
+
+def _cmd_organize(args: argparse.Namespace) -> int:
+    """File Songipy-prefixed playlists into real Spotify folders (local-only).
+
+    The live path launches the logged-in Playwright profile and drives the web
+    player's internal rootlist API; ``--dry-run`` lists the same plan without a
+    folder browser (it still authenticates via the Web API to list playlists).
+    """
+    settings = config.get_settings()
+    spotify = _get_spotify(auth.SCOPES_ALL)
+
+    prefix = f"{config.PLAYLIST_ROOT}/" if config.PLAYLIST_ROOT else ""
+    targets: list[folder_plan.PlaylistTarget] = []
+    uri_by_name: dict[str, str] = {}
+    unrecognized: list[str] = []
+    for playlist in _iter_user_playlists(spotify):
+        name = playlist.get("name") or ""
+        if prefix and not name.startswith(prefix):
+            continue
+        target = folder_plan.parse_playlist_name(
+            name,
+            root=config.PLAYLIST_ROOT,
+            subfolders=config.folder_subfolders(),
+        )
+        if target is None:
+            unrecognized.append(name)
+        else:
+            uri_by_name[name] = playlist.get("uri") or ""
+            targets.append(target)
+
+    if args.dry_run:
+        plan = folder_plan.decide_actions(
+            targets,
+            existing_folders=set(),
+            existing_placements={},
+            nested=False,
+            unrecognized=unrecognized,
+        )
+        print(f"folders to create: {len(plan.create_folders)}")
+        for path in plan.create_folders:
+            print(f"  [dry-run] create folder {path[-1]!r}")
+        print(f"moves: {len(plan.moves)}")
+        for name, path in plan.moves:
+            print(f"  [dry-run] move {name!r} -> {path[-1]!r}")
+        print(f"skipped: {len(plan.skipped)}")
+        for name in plan.skipped:
+            print(f"  [dry-run] already placed {name!r}")
+        print(f"unrecognized: {len(plan.unrecognized)}")
+        for name in plan.unrecognized:
+            print(f"  [dry-run] unrecognized {name!r}")
+        return 0
+
+    username = settings.spotify_username
+    if not username:
+        me = spotify.me()
+        username = me.get("id") or ""
+    if not username:
+        raise RuntimeError("could not determine the Spotify username; set SPOTIFY_USERNAME")
+
+    user_data_dir = settings.spotify_chrome_profile or _default_chrome_profile_dir()
+    driver = folders.PlaywrightFolderDriver(
+        folders.DriverConfig(
+            user_data_dir=user_data_dir,
+            channel=settings.spotify_chrome_channel,
+            headful=not settings.folder_sync_headless,
+            username=username,
+        )
+    )
+    try:
+        driver.open()
+        folder_map = driver.list_folders()
+        placements = driver.list_placements()
+
+        existing_folders = set(folder_map)
+        # Join the Web API name <-> uri list with the driver's uri -> path map;
+        # only Songipy playlists are interesting, unknown names can be ignored.
+        uri_to_name = {uri: name for name, uri in uri_by_name.items() if uri}
+        existing_placements: dict[str, tuple[str, ...]] = {}
+        for uri, path in placements.items():
+            name = uri_to_name.get(uri)
+            if name is None:
+                continue
+            existing_placements[name] = path or ()
+
+        plan = folder_plan.decide_actions(
+            targets,
+            existing_folders=existing_folders,
+            existing_placements=existing_placements,
+            nested=False,
+            unrecognized=unrecognized,
+        )
+
+        folder_name_by_path = {
+            folder_plan.desired_folder_path(target, nested=False): folder_plan.folder_name_for(
+                target, root=config.PLAYLIST_ROOT
+            )
+            for target in targets
+        }
+
+        folder_start_uri_by_path = dict(folder_map)
+        created_folders: list[str] = []
+        for path in plan.create_folders:
+            start_uri = driver.create_folder(path, folder_name_by_path[path])
+            folder_start_uri_by_path[path] = start_uri
+            created_folders.append(path[-1])
+
+        moved: list[tuple[str, str]] = []
+        for name, path in plan.moves:
+            start_uri = folder_start_uri_by_path.get(path)
+            if start_uri is None:
+                raise RuntimeError(f"no start-group URI known for folder path {path!r}")
+            driver.move_playlist(uri_by_name[name], start_uri)
+            moved.append((name, path[-1]))
+
+        for folder_name in created_folders:
+            print(f"created folder {folder_name!r}")
+        for name, folder_name in moved:
+            print(f"moved {name!r} -> {folder_name!r}")
+        print(
+            f"created {len(created_folders)} folder(s), "
+            f"moved {len(moved)} playlist(s), skipped {len(plan.skipped)}"
+        )
+        for name in plan.skipped:
+            print(f"  already placed {name!r}")
+        for name in plan.unrecognized:
+            print(f"  unrecognized {name!r}")
+    finally:
+        driver.close()
+    return 0
+
+
 def _add_shared_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--dry-run",
@@ -235,6 +382,19 @@ def build_parser() -> argparse.ArgumentParser:
         sub = subparsers.add_parser(name, help=help_text)
         _add_shared_options(sub)
         sub.set_defaults(func=handler)
+
+    organize_parser = subparsers.add_parser(
+        "organize",
+        help="move Songipy playlists into real Spotify folders via the internal rootlist API",
+    )
+    organize_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="list the plan without launching a folder browser "
+        "(playlists are still read via the Web API)",
+    )
+    organize_parser.set_defaults(func=_cmd_organize)
 
     return parser
 

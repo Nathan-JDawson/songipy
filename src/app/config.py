@@ -38,6 +38,22 @@ PLAYLIST_NAME_FORMAT: dict[str, str] = {
     "albums": "Albums/{label} — {timestamp}",
 }
 
+# Subfolders used by the folder-style playlist names under PLAYLIST_ROOT.
+FOLDER_SUBFOLDERS: tuple[str, ...] = ("Albums", "Genres")
+
+
+def folder_subfolders() -> tuple[str, ...]:
+    """Return the subfolder names used under ``PLAYLIST_ROOT``."""
+    return FOLDER_SUBFOLDERS
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    """Parse ``name`` as a boolean ("1"/"true"/"yes" -> True); else ``default``."""
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes"}
+
 
 def utc_timestamp() -> str:
     """Return the current UTC time as ``%Y-%m-%d %H:%M``."""
@@ -70,6 +86,10 @@ class Settings:
     spotify_refresh_token: str | None
     database_url: str | None
     token_cache_path: str
+    spotify_chrome_profile: str | None
+    spotify_chrome_channel: str | None
+    spotify_username: str | None
+    folder_sync_headless: bool
 
 
 def get_settings() -> Settings:
@@ -79,6 +99,14 @@ def get_settings() -> Settings:
         spotify_refresh_token=os.getenv("SPOTIFY_REFRESH_TOKEN"),
         database_url=os.getenv("DATABASE_URL"),
         token_cache_path=os.getenv("SPOTIFY_TOKEN_CACHE", DEFAULT_TOKEN_CACHE_PATH),
+        spotify_chrome_profile=os.getenv("SPOTIFY_CHROME_PROFILE"),
+        # None/empty -> Playwright's bundled Chromium (no `channel`); a
+        # non-empty value (e.g. "chrome" or "msedge") selects an installed browser.
+        spotify_chrome_channel=os.getenv("SPOTIFY_CHROME_CHANNEL") or None,
+        # Optional override for the account username used in spclient rootlist
+        # URLs; when unset `organize` derives it from `spotify.me()["id"]`.
+        spotify_username=os.getenv("SPOTIFY_USERNAME") or None,
+        folder_sync_headless=_env_bool("FOLDER_SYNC_HEADLESS", default=False),
     )
 
 
