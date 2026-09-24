@@ -194,6 +194,29 @@ def all_listens_ordered(db: Database) -> list[dict[str, Any]]:
     return _query(db, "SELECT * FROM listens ORDER BY played_at ASC", [])
 
 
+def listen_stats_by_uri(db: Database) -> dict[str, dict[str, int]]:
+    """Return per-track listen aggregates keyed by track URI.
+
+    Each value maps to ``{"play_count": int, "ms_played_total": int}`` where
+    ``ms_played_total`` is the COALESCE'd sum of ``ms_played`` (0 when no row
+    has a value). COUNT/SUM/GROUP BY are portable across SQLite and Postgres.
+    """
+    rows = _query(
+        db,
+        "SELECT track_uri, COUNT(*) AS play_count, "
+        "COALESCE(SUM(ms_played), 0) AS ms_played_total "
+        "FROM listens GROUP BY track_uri",
+        [],
+    )
+    return {
+        row["track_uri"]: {
+            "play_count": int(row["play_count"]),
+            "ms_played_total": int(row["ms_played_total"]),
+        }
+        for row in rows
+    }
+
+
 def listens_since(db: Database, iso_ts: str) -> list[dict[str, Any]]:
     return _query(
         db,

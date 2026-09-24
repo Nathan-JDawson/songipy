@@ -5,6 +5,7 @@ from app.db import (
     all_listens_ordered,
     create_schema,
     latest_listens,
+    listen_stats_by_uri,
     listens_since,
     upsert_listens,
 )
@@ -93,3 +94,36 @@ def test_listens_since_filters(db: Database) -> None:
     rows = listens_since(db, "2026-09-14T12:00:00.000Z")
 
     assert [row["track_uri"] for row in rows] == ["spotify:track:2"]
+
+
+def test_listen_stats_by_uri_counts_and_sums(db: Database) -> None:
+    upsert_listens(
+        db,
+        [
+            _row("2026-09-14T12:00:00.000Z", "spotify:track:1"),
+            _row("2026-09-14T12:01:00.000Z", "spotify:track:1"),
+            _row("2026-09-14T12:02:00.000Z", "spotify:track:2"),
+        ],
+    )
+
+    stats = listen_stats_by_uri(db)
+
+    assert stats == {
+        "spotify:track:1": {"play_count": 2, "ms_played_total": 120000},
+        "spotify:track:2": {"play_count": 1, "ms_played_total": 60000},
+    }
+
+
+def test_listen_stats_by_uri_handles_null_ms_played(db: Database) -> None:
+    row = _row("2026-09-14T12:00:00.000Z", "spotify:track:1")
+    row["ms_played"] = None
+    upsert_listens(db, [row])
+
+    stats = listen_stats_by_uri(db)
+
+    assert stats["spotify:track:1"]["play_count"] == 1
+    assert stats["spotify:track:1"]["ms_played_total"] == 0
+
+
+def test_listen_stats_by_uri_empty(db: Database) -> None:
+    assert listen_stats_by_uri(db) == {}

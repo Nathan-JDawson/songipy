@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import sys
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -86,6 +87,17 @@ def _cmd_sync_genres(args: argparse.Namespace) -> int:
     spotify = _get_spotify(auth.SCOPES_ALL)
     tracks = _saved_tracks(spotify, args.top)
     mapping = classify.genre_playlist_map(spotify, tracks)
+
+    mode = args.tracks
+    if mode != "all":
+        database = _open_db()
+        listen_stats = db_module.listen_stats_by_uri(database)
+        cap = config.genre_max_tracks_per_album()
+        mapping = {
+            genre: classify.dedupe_album_tracks(genre_tracks, listen_stats, cap, mode)
+            for genre, genre_tracks in mapping.items()
+        }
+
     kept = classify.keep_min_genres(mapping, config.MIN_PLAYLIST_TRACKS)
     print(
         f"skipped {len(mapping) - len(kept)} genres with fewer than "
@@ -96,14 +108,15 @@ def _cmd_sync_genres(args: argparse.Namespace) -> int:
         print("No genres found for the saved tracks.")
         return 0
 
-    for genre, track_uris in sorted(kept.items()):
+    for genre, genre_tracks in sorted(kept.items()):
         name = config.make_playlist_name("genre", genre)
         if args.dry_run:
-            print(f"[dry-run] {name} ({len(track_uris)} tracks)")
+            print(f"[dry-run] {name} ({len(genre_tracks)} tracks)")
             continue
         playlist_id = playlists_module.create_playlist(spotify, name)
+        track_uris = [track["uri"] for track in genre_tracks]
         playlists_module.add_tracks(spotify, playlist_id, track_uris)
-        print(f"{name} ({len(track_uris)} tracks)")
+        print(f"{name} ({len(genre_tracks)} tracks)")
     return 0
 
 
@@ -185,6 +198,49 @@ def _iter_user_playlists(spotify):
         if not page.get("next"):
             break
         page = api.call_with_retry(spotify.next, page)
+
+
+def _cmd_prune(args: argparse.Namespace) -> int:
+    """Delete all Songipy-prefixed playlists owned by the current user.
+
+    The live path requires ``--yes`` because deletion is permanent; ``--dry-run``
+    only lists the playlists that would be deleted.
+    """
+    spotify = _get_spotify(auth.SCOPES_ALL)
+    user_id = api.call_with_retry(spotify.me)["id"]
+
+    prefix = f"{config.PLAYLIST_ROOT}/" if config.PLAYLIST_ROOT else ""
+    subfolder_prefixes = [f"{sub}/" for sub in config.folder_subfolders()]
+
+    targets: list[dict] = []
+    for playlist in _iter_user_playlists(spotify):
+        name = playlist.get("name") or ""
+        if (playlist.get("owner") or {}).get("id") != user_id:
+            continue
+        if prefix:
+            if name.startswith(prefix):
+                targets.append(playlist)
+        elif any(name.startswith(sub) for sub in subfolder_prefixes):
+            targets.append(playlist)
+
+    if args.dry_run:
+        print(f"[dry-run] would delete {len(targets)} playlist(s)")
+        for playlist in targets:
+            print(f"  {playlist.get('name')}")
+        return 0
+
+    if not args.yes:
+        print(
+            "Refusing to delete playlists without confirmation: deletion is "
+            "permanent. Re-run with --yes to confirm.",
+            file=sys.stderr,
+        )
+        return 2
+
+    for playlist in targets:
+        api.call_with_retry(spotify.current_user_unfollow_playlist, playlist.get("id"))
+    print(f"deleted {len(targets)} playlist(s)")
+    return 0
 
 
 def _default_chrome_profile_dir() -> str:
@@ -381,7 +437,33 @@ def build_parser() -> argparse.ArgumentParser:
     ):
         sub = subparsers.add_parser(name, help=help_text)
         _add_shared_options(sub)
+        if name == "sync-genres":
+            sub.add_argument(
+                "--tracks",
+                choices=config.GENRE_TRACK_SELECTION_CHOICES,
+                default=config.genre_track_selection(),
+                help="how to select/dedupe tracks per album: all (no dedupe), "
+                "listened (rank by local listen stats; default), popular "
+                "(rank by track popularity)",
+            )
         sub.set_defaults(func=handler)
+
+    prune_parser = subparsers.add_parser(
+        "prune",
+        help="delete all Songipy-prefixed playlists (permanent; requires --yes)",
+    )
+    prune_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="list the playlists that would be deleted without deleting anything",
+    )
+    prune_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="confirm deletion; deleted playlists cannot be recovered",
+    )
+    prune_parser.set_defaults(func=_cmd_prune)
 
     organize_parser = subparsers.add_parser(
         "organize",

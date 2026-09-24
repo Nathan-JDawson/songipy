@@ -41,10 +41,27 @@ PLAYLIST_NAME_FORMAT: dict[str, str] = {
 # Subfolders used by the folder-style playlist names under PLAYLIST_ROOT.
 FOLDER_SUBFOLDERS: tuple[str, ...] = ("Albums", "Genres")
 
+# sync-genres per-album track selection modes and defaults.
+GENRE_TRACK_SELECTION_CHOICES: tuple[str, ...] = ("all", "listened", "popular")
+DEFAULT_GENRE_TRACK_SELECTION = "listened"
+DEFAULT_GENRE_MAX_TRACKS_PER_ALBUM = 5
+
 
 def folder_subfolders() -> tuple[str, ...]:
     """Return the subfolder names used under ``PLAYLIST_ROOT``."""
     return FOLDER_SUBFOLDERS
+
+
+def genre_track_selection() -> str:
+    """Return the sync-genres track-selection mode from ``GENRE_TRACK_SELECTION``."""
+    return _env_choice(
+        "GENRE_TRACK_SELECTION", DEFAULT_GENRE_TRACK_SELECTION, GENRE_TRACK_SELECTION_CHOICES
+    )
+
+
+def genre_max_tracks_per_album() -> int:
+    """Return the per-album track cap for sync-genres from ``GENRE_MAX_TRACKS_PER_ALBUM``."""
+    return max(1, _env_int("GENRE_MAX_TRACKS_PER_ALBUM", DEFAULT_GENRE_MAX_TRACKS_PER_ALBUM))
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -53,6 +70,28 @@ def _env_bool(name: str, default: bool) -> bool:
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes"}
+
+
+def _env_int(name: str, default: int) -> int:
+    """Parse ``name`` as an int; on missing/invalid values return ``default``."""
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        return int(value.strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_choice(name: str, default: str, choices: tuple[str, ...]) -> str:
+    """Parse ``name`` as one of ``choices`` (case/space-insensitive); else ``default``."""
+    value = os.getenv(name)
+    if value is None:
+        return default
+    cleaned = value.strip().lower()
+    if cleaned in choices:
+        return cleaned
+    return default
 
 
 def utc_timestamp() -> str:

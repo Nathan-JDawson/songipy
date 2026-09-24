@@ -53,6 +53,8 @@ uv run python -m app import "path\to\MyData.zip"
 | `SPOTIFY_CHROME_CHANNEL` | Installed browser for `organize` (`chrome`, `msedge`); unset = bundled Chromium | *(unset)* |
 | `SPOTIFY_USERNAME` | Account username override for `organize` (else derived from `spotify.me()`) | — |
 | `FOLDER_SYNC_HEADLESS` | `1` to run the `organize` browser headless | `0` |
+| `GENRE_TRACK_SELECTION` | `sync-genres` track-selection mode: `all` (no dedupe), `listened` (rank by local listen stats), `popular` (rank by track popularity) | `listened` |
+| `GENRE_MAX_TRACKS_PER_ALBUM` | Max tracks one album may contribute to a genre playlist (`listened`/`popular` modes) | `5` |
 
 ## Usage
 
@@ -66,14 +68,19 @@ uv run python -m app <command> [--dry-run] [--top N]
 | `import <path>` | Import a Spotify data export (zip or directory) into the listens DB |
 | `poll` | Fetch recent plays and store new ones (used by CI, runnable locally) |
 | `recent [N]` | Print the last N listens from the DB (default 10) |
-| `sync-genres` | Create per-genre playlists from saved tracks |
+| `sync-genres` | Create per-genre playlists from saved tracks (`--tracks {all,listened,popular}`) |
 | `sync-albums` | Create per-date-window album playlists from recent listens |
 | `organize` | Move `Songipy/…` playlists into real Spotify folders |
+| `prune` | Delete all `Songipy/…` playlists you own (`--dry-run` to preview; live run requires `--yes`) |
 
 Global flags:
 
 - `--dry-run` — compute and print what would happen without writing to Spotify (for `organize`, no browser is launched; playlists are still read via the Web API).
 - `--top N` — limit saved tracks (`sync-genres`) or albums per window (`sync-albums`).
+
+`sync-genres` also accepts:
+
+- `--tracks {all,listened,popular}` — how to select/dedupe saved tracks per album within each genre playlist (default `listened`, or the `GENRE_TRACK_SELECTION` env var). `all` keeps current behavior (no dedupe, no DB read); `listened` ranks each album's tracks by local listen stats; `popular` ranks by track popularity. See "How playlists are generated".
 
 ### Typical flow
 
@@ -85,11 +92,13 @@ uv run python -m app sync-albums --dry-run
 uv run python -m app sync-albums                     # create album playlists
 uv run python -m app organize --dry-run
 uv run python -m app organize                        # file them into real folders
+uv run python -m app prune --dry-run                 # list old generated playlists
+uv run python -m app prune --yes                     # delete them permanently
 ```
 
 ## How playlists are generated
 
-- **Genres**: tracks are tagged with every genre of their artists (`artists` endpoint, batched 50/call). A playlist is created per genre, but only if it would hold ≥ `MIN_PLAYLIST_TRACKS` (50) tracks.
+- **Genres**: tracks are tagged with every genre of their artists (`artists` endpoint, batched 50/call). A playlist is created per genre, but only if it would hold ≥ `MIN_PLAYLIST_TRACKS` (50) tracks. By default (`--tracks listened`) the saved tracks are first filtered to those with listening history, then deduped per album so a single album can't dominate a genre playlist: albums contributing more than `GENRE_MAX_TRACKS_PER_ALBUM` (5) listened tracks keep only their top-5 most-listened tracks, ranked by play count, then ms played, then track number. Tracks with no listening history are dropped entirely (an album you've saved but never played contributes nothing); a single listened track from an otherwise-unplayed album still makes it in. The per-album cap applies to the listened subset, so an album whose tracks were all filtered out contributes nothing. Local-file tracks and tracks without album metadata are never deduped by the per-album cap, though they are still subject to the listening-history filter. Dedupe runs *before* the 50-track floor, so the floor reflects the final playlist size. `--tracks all` disables dedupe (no DB read); `--tracks popular` ranks each album's listened tracks by track popularity (missing popularity = least popular) with no extra API calls.
 - **Albums**: listens in the DB are grouped into time windows defined by `ALBUM_WINDOWS` in `src/app/config.py` (last 7/30/90 days and the 8–14-day-ago week). An album counts as "listened to" if ≥ `MIN_TRACKS_PER_ALBUM` (3) distinct tracks were played in the window. Each window becomes one playlist with the albums' full track lists back-to-back, ordered by most-recent activity.
 - **Names**: `Songipy/Albums/<window> — <UTC timestamp>` and `Songipy/Genres/<genre> — <UTC timestamp>` (`PLAYLIST_ROOT` is configurable; set it to `""` to disable the prefix). A fresh timestamped playlist is created on every run — nothing is overwritten.
 
@@ -104,6 +113,13 @@ The public Spotify Web API has **no folder support**, so `organize` drives the w
 - **Local-only**: it needs an interactive browser session, so it must **never** be added to the GitHub Actions poll workflow.
 
 > Note: automating the web player's internal API is unofficial and subject to Spotify's terms. Keep usage low-volume and personal.
+
+## Pruning generated playlists (`prune`)
+
+`sync-genres`/`sync-albums` create a fresh timestamped playlist on every run, so they accumulate over time. `prune` deletes every `Songipy/…` playlist you own (when `PLAYLIST_ROOT` is empty it matches the `Albums/…`/`Genres/…` prefixes instead), leaving other playlists untouched.
+
+- **`prune --dry-run`** — lists the count and each playlist that would be deleted; no API mutations.
+- **`prune --yes`** — performs the deletion via `current_user_unfollow_playlist`. Deletion is **permanent** (Spotify playlists can't be restored), so the live path refuses to run without `--yes` and exits non-zero.
 
 ## Continuous polling (CI)
 
@@ -131,7 +147,7 @@ uv run pytest -q                   # tests (SQLite only — never a live Postgre
 
 ```
 src/app/
-  __main__.py      # CLI (auth, import, poll, recent, sync-genres, sync-albums, organize)
+  __main__.py      # CLI (auth, import, poll, recent, sync-genres, sync-albums, organize, prune)
   auth.py          # PKCE + refresh-token auth
   db.py            # Postgres/SQLite storage layer (listens table)
   import_history.py# Spotify export parser
