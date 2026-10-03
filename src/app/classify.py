@@ -6,11 +6,19 @@ import logging
 from typing import Any
 
 from app import api
-from app.config import GENRE_TRACK_SELECTION_CHOICES
+from app.config import (
+    GENRE_TRACK_SELECTION_CHOICES,
+    TRACK_SELECTION_ALL,
+    TRACK_SELECTION_LISTENED,
+)
 
 logger = logging.getLogger(__name__)
 
 ARTIST_BATCH_SIZE = 50
+
+_MISSING_POPULARITY = -1
+
+_MISSING_TRACK_NUMBER = float("inf")
 
 
 def normalize_genre(genre: str) -> str:
@@ -91,7 +99,7 @@ def _track_number(track: dict) -> int | float:
     value = track.get("track_number")
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return value
-    return float("inf")
+    return _MISSING_TRACK_NUMBER
 
 
 def _rank_listened(group: list[dict], listen_stats: dict[str, dict]) -> list[dict]:
@@ -116,7 +124,7 @@ def _rank_popular(group: list[dict]) -> list[dict]:
     def key(track: dict) -> tuple[int, int | float]:
         popularity = track.get("popularity")
         if not isinstance(popularity, (int, float)) or isinstance(popularity, bool):
-            popularity = -1
+            popularity = _MISSING_POPULARITY
         return (-int(popularity), _track_number(track))
 
     return sorted(group, key=key)
@@ -161,7 +169,7 @@ def dedupe_album_tracks(
 
     The result preserves the original track order (a stable filter).
     """
-    if mode == "all":
+    if mode == TRACK_SELECTION_ALL:
         return list(tracks)
     if mode not in GENRE_TRACK_SELECTION_CHOICES:
         raise ValueError(
@@ -180,7 +188,7 @@ def dedupe_album_tracks(
         if len(group) <= cap:
             kept_ids.update(id(track) for track in group)
             continue
-        if mode == "listened":
+        if mode == TRACK_SELECTION_LISTENED:
             ranked = _rank_listened(group, listen_stats)
         else:
             ranked = _rank_popular(group)

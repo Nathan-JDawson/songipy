@@ -8,6 +8,7 @@ import sys
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from app import albums, api, auth, classify, config, folder_plan, folders, import_history, library
 from app import db as db_module
@@ -34,7 +35,7 @@ def _get_spotify(scopes: list[str]):
     return auth.get_local_spotify(scopes)
 
 
-def _open_db(*, write: bool = False) -> db_module.Database:
+def _open_db() -> db_module.Database:
     database = db_module.Database(config.get_database_url())
     db_module.create_schema(database)
     return database
@@ -49,14 +50,14 @@ def _cmd_auth(args: argparse.Namespace) -> int:
 
 
 def _cmd_import(args: argparse.Namespace) -> int:
-    database = _open_db(write=True)
+    database = _open_db()
     count = import_history.import_export(args.path, database)
     print(f"Imported {count} listens.")
     return 0
 
 
 def _cmd_poll(args: argparse.Namespace) -> int:
-    database = _open_db(write=True)
+    database = _open_db()
     spotify = _get_spotify(auth.SCOPES_POLL)
     count = poll_module.poll_recent(spotify, database)
     print(f"Inserted {count} new listens.")
@@ -83,87 +84,83 @@ def _saved_tracks(spotify, limit: int | None) -> list[dict]:
     return tracks
 
 
-def _cmd_sync_genres(args: argparse.Namespace) -> int:
-    spotify = _get_spotify(auth.SCOPES_ALL)
-    tracks = _saved_tracks(spotify, args.top)
-    mapping = classify.genre_playlist_map(spotify, tracks)
+def _dedupe_genre_mapping(mapping: dict[str, list[dict]], mode: str) -> dict[str, list[dict]]:
+    """Apply per-album track dedupe for ``mode`` (no-op for the "all" mode)."""
+    if mode == config.TRACK_SELECTION_ALL:
+        return mapping
+    database = _open_db()
+    listen_stats = db_module.listen_stats_by_uri(database)
+    cap = config.genre_max_tracks_per_album()
+    return {
+        genre: classify.dedupe_album_tracks(genre_tracks, listen_stats, cap, mode)
+        for genre, genre_tracks in mapping.items()
+    }
 
-    mode = args.tracks
-    if mode != "all":
-        database = _open_db()
-        listen_stats = db_module.listen_stats_by_uri(database)
-        cap = config.genre_max_tracks_per_album()
-        mapping = {
-            genre: classify.dedupe_album_tracks(genre_tracks, listen_stats, cap, mode)
-            for genre, genre_tracks in mapping.items()
-        }
 
-    kept = classify.keep_min_genres(mapping, config.MIN_PLAYLIST_TRACKS)
-    print(
-        f"skipped {len(mapping) - len(kept)} genres with fewer than "
-        f"{config.MIN_PLAYLIST_TRACKS} tracks"
-    )
-
-    if not kept:
-        print("No genres found for the saved tracks.")
-        return 0
-
-    for genre, genre_tracks in sorted(kept.items()):
+def _create_genre_playlists(spotify: Any, mapping: dict[str, list[dict]], *, dry_run: bool) -> None:
+    """Create (or, for ``dry_run``, print) one playlist per genre."""
+    for genre, genre_tracks in sorted(mapping.items()):
         name = config.make_playlist_name("genre", genre)
-        if args.dry_run:
+        if dry_run:
             print(f"[dry-run] {name} ({len(genre_tracks)} tracks)")
             continue
         playlist_id = playlists_module.create_playlist(spotify, name)
         track_uris = [track["uri"] for track in genre_tracks]
         playlists_module.add_tracks(spotify, playlist_id, track_uris)
         print(f"{name} ({len(genre_tracks)} tracks)")
+
+
+def _cmd_sync_genres(args: argparse.Namespace) -> int:
+    spotify = _get_spotify(auth.SCOPES_ALL)
+    tracks = _saved_tracks(spotify, args.top)
+    mapping = classify.genre_playlist_map(spotify, tracks)
+    mapping = _dedupe_genre_mapping(mapping, args.tracks)
+    kept = classify.keep_min_genres(mapping, config.MIN_PLAYLIST_TRACKS)
+    print(
+        f"skipped {len(mapping) - len(kept)} genres with fewer than "
+        f"{config.MIN_PLAYLIST_TRACKS} tracks"
+    )
+    if not kept:
+        print("No genres found for the saved tracks.")
+        return 0
+    _create_genre_playlists(spotify, kept, dry_run=args.dry_run)
     return 0
 
 
-def _cmd_sync_albums(args: argparse.Namespace) -> int:
-    database = _open_db()
-    listens = db_module.all_listens_ordered(database)
+def _print_album_plans(plans: list[albums.WindowPlan]) -> None:
+    """Print the dry-run representation of one plan per window."""
+    for plan in plans:
+        if not plan.albums:
+            continue
+        names = ", ".join(album.name for album in plan.albums)
+        name = config.make_playlist_name("albums", plan.spec.label)
+        count = len(plan.albums)
+        plural = "" if count == 1 else "s"
+        print(f"[dry-run] {name} ({count} album{plural}): {names}")
 
-    windows = [albums.WindowSpec(*window) for window in config.ALBUM_WINDOWS]
-    plans = albums.group_albums_by_window(listens, windows, config.MIN_TRACKS_PER_ALBUM)
 
-    if all(not plan.albums for plan in plans):
-        print("No albums found in any window.")
-        return 0
-
-    if args.top is not None:
-        limit = max(0, args.top)
-        plans = [replace(plan, albums=plan.albums[:limit]) for plan in plans]
-
-    if args.dry_run:
-        for plan in plans:
-            if not plan.albums:
-                continue
-            names = ", ".join(album.name for album in plan.albums)
-            name = config.make_playlist_name("albums", plan.spec.label)
-            count = len(plan.albums)
-            plural = "" if count == 1 else "s"
-            print(f"[dry-run] {name} ({count} album{plural}): {names}")
-        return 0
-
-    spotify = _get_spotify(auth.SCOPES_ALL)
-
-    all_keys = list(dict.fromkeys(album.key for plan in plans for album in plan.albums))
+def _resolve_album_ids(plans: list[albums.WindowPlan], spotify: Any) -> dict[str, str]:
+    """Resolve each album key to its Spotify album id via a representative track."""
     album_to_track: dict[str, str] = {}
-    album_to_name: dict[str, str] = {}
     for plan in plans:
         for album in plan.albums:
             album_to_track.setdefault(album.key, album.track_uri)
-            album_to_name.setdefault(album.key, album.name)
-
-    uris = [album_to_track[key] for key in all_keys if album_to_track.get(key)]
+    uris = [uri for uri in album_to_track.values() if uri]
     uri_to_album = library.resolve_album_ids(spotify, uris)
-    album_id_cache: dict[str, str] = {
-        key: uri_to_album[album_to_track[key]]
-        for key in all_keys
-        if album_to_track.get(key) in uri_to_album
+    return {
+        key: uri_to_album[track_uri]
+        for key, track_uri in album_to_track.items()
+        if track_uri in uri_to_album
     }
 
+
+def _create_album_playlists(
+    spotify: Any,
+    plans: list[albums.WindowPlan],
+    album_id_cache: dict[str, str],
+) -> None:
+    """Create one playlist per window from the resolved album track lists."""
+    album_to_name = {album.key: album.name for plan in plans for album in plan.albums}
     for plan in plans:
         track_uris: list[str] = []
         for album in plan.albums:
@@ -176,17 +173,37 @@ def _cmd_sync_albums(args: argparse.Namespace) -> int:
                 )
                 continue
             track_uris.extend(library.iter_album_tracks(spotify, album_id))
-
         if not track_uris:
             logger.warning("Skipping window with no resolvable tracks: %r", plan.spec.label)
             continue
-
         name = config.make_playlist_name("albums", plan.spec.label)
         playlist_id = playlists_module.create_playlist(spotify, name)
         playlists_module.add_tracks(spotify, playlist_id, track_uris)
         count = len(plan.albums)
         plural = "" if count == 1 else "s"
         print(f"{name} ({count} album{plural})")
+
+
+def _cmd_sync_albums(args: argparse.Namespace) -> int:
+    database = _open_db()
+    listens = db_module.all_listens_ordered(database)
+    windows = [albums.WindowSpec(*window) for window in config.ALBUM_WINDOWS]
+    plans = albums.group_albums_by_window(listens, windows, config.MIN_TRACKS_PER_ALBUM)
+
+    if all(not plan.albums for plan in plans):
+        print("No albums found in any window.")
+        return 0
+
+    if args.top is not None:
+        plans = [replace(plan, albums=plan.albums[: max(0, args.top)]) for plan in plans]
+
+    if args.dry_run:
+        _print_album_plans(plans)
+        return 0
+
+    spotify = _get_spotify(auth.SCOPES_ALL)
+    album_id_cache = _resolve_album_ids(plans, spotify)
+    _create_album_playlists(spotify, plans, album_id_cache)
     return 0
 
 
@@ -249,16 +266,10 @@ def _default_chrome_profile_dir() -> str:
     return str(repo_root / ".spotify-chrome-profile")
 
 
-def _cmd_organize(args: argparse.Namespace) -> int:
-    """File Songipy-prefixed playlists into real Spotify folders (local-only).
-
-    The live path launches the logged-in Playwright profile and drives the web
-    player's internal rootlist API; ``--dry-run`` lists the same plan without a
-    folder browser (it still authenticates via the Web API to list playlists).
-    """
-    settings = config.get_settings()
-    spotify = _get_spotify(auth.SCOPES_ALL)
-
+def _collect_playlist_targets(
+    spotify: Any,
+) -> tuple[list[folder_plan.PlaylistTarget], dict[str, str], list[str]]:
+    """Return (targets, uri_by_name, unrecognized) for the user's Songipy playlists."""
     prefix = f"{config.PLAYLIST_ROOT}/" if config.PLAYLIST_ROOT else ""
     targets: list[folder_plan.PlaylistTarget] = []
     uri_by_name: dict[str, str] = {}
@@ -277,6 +288,107 @@ def _cmd_organize(args: argparse.Namespace) -> int:
         else:
             uri_by_name[name] = playlist.get("uri") or ""
             targets.append(target)
+    return targets, uri_by_name, unrecognized
+
+
+def _print_organize_plan(plan: folder_plan.FolderPlan) -> None:
+    """Print the dry-run representation of a folder plan."""
+    print(f"folders to create: {len(plan.create_folders)}")
+    for path in plan.create_folders:
+        print(f"  [dry-run] create folder {path[-1]!r}")
+    print(f"moves: {len(plan.moves)}")
+    for name, path in plan.moves:
+        print(f"  [dry-run] move {name!r} -> {path[-1]!r}")
+    print(f"skipped: {len(plan.skipped)}")
+    for name in plan.skipped:
+        print(f"  [dry-run] already placed {name!r}")
+    print(f"unrecognized: {len(plan.unrecognized)}")
+    for name in plan.unrecognized:
+        print(f"  [dry-run] unrecognized {name!r}")
+
+
+def _apply_organize_plan(
+    plan: folder_plan.FolderPlan,
+    driver: folders.FolderDriver,
+    targets: list[folder_plan.PlaylistTarget],
+    uri_by_name: dict[str, str],
+    folder_map: dict[tuple[str, ...], str],
+) -> None:
+    """Create the plan's folders and move its playlists, printing the outcome."""
+    folder_name_by_path = {
+        folder_plan.desired_folder_path(target, nested=False): folder_plan.folder_name_for(
+            target, root=config.PLAYLIST_ROOT
+        )
+        for target in targets
+    }
+    folder_start_uri_by_path = dict(folder_map)
+    created_folders: list[str] = []
+    for path in plan.create_folders:
+        start_uri = driver.create_folder(path, folder_name_by_path[path])
+        folder_start_uri_by_path[path] = start_uri
+        created_folders.append(path[-1])
+    moved: list[tuple[str, str]] = []
+    for name, path in plan.moves:
+        start_uri = folder_start_uri_by_path.get(path)
+        if start_uri is None:
+            raise RuntimeError(f"no start-group URI known for folder path {path!r}")
+        driver.move_playlist(uri_by_name[name], start_uri)
+        moved.append((name, path[-1]))
+    for folder_name in created_folders:
+        print(f"created folder {folder_name!r}")
+    for name, folder_name in moved:
+        print(f"moved {name!r} -> {folder_name!r}")
+    print(
+        f"created {len(created_folders)} folder(s), "
+        f"moved {len(moved)} playlist(s), skipped {len(plan.skipped)}"
+    )
+    for name in plan.skipped:
+        print(f"  already placed {name!r}")
+    for name in plan.unrecognized:
+        print(f"  unrecognized {name!r}")
+
+
+def _resolve_spotify_username(settings: config.Settings, spotify: Any) -> str:
+    """Return the account username for spclient URLs, from settings or the Web API."""
+    username = settings.spotify_username
+    if not username:
+        me = spotify.me()
+        username = me.get("id") or ""
+    if not username:
+        raise RuntimeError("could not determine the Spotify username; set SPOTIFY_USERNAME")
+    return username
+
+
+def _build_existing_placements(
+    placements: dict[str, tuple[str, ...] | None],
+    uri_by_name: dict[str, str],
+) -> dict[str, tuple[str, ...]]:
+    """Map Songipy playlist names to their current folder paths from the rootlist.
+
+    Only playlists that appear in ``uri_by_name`` (the Web API name <-> uri list)
+    are interesting; unknown names are ignored. ``None`` (library root) maps to
+    the empty tuple.
+    """
+    uri_to_name = {uri: name for name, uri in uri_by_name.items() if uri}
+    existing: dict[str, tuple[str, ...]] = {}
+    for uri, path in placements.items():
+        name = uri_to_name.get(uri)
+        if name is None:
+            continue
+        existing[name] = path or ()
+    return existing
+
+
+def _cmd_organize(args: argparse.Namespace) -> int:
+    """File Songipy-prefixed playlists into real Spotify folders (local-only).
+
+    The live path launches the logged-in Playwright profile and drives the web
+    player's internal rootlist API; ``--dry-run`` lists the same plan without a
+    folder browser (it still authenticates via the Web API to list playlists).
+    """
+    settings = config.get_settings()
+    spotify = _get_spotify(auth.SCOPES_ALL)
+    targets, uri_by_name, unrecognized = _collect_playlist_targets(spotify)
 
     if args.dry_run:
         plan = folder_plan.decide_actions(
@@ -286,27 +398,10 @@ def _cmd_organize(args: argparse.Namespace) -> int:
             nested=False,
             unrecognized=unrecognized,
         )
-        print(f"folders to create: {len(plan.create_folders)}")
-        for path in plan.create_folders:
-            print(f"  [dry-run] create folder {path[-1]!r}")
-        print(f"moves: {len(plan.moves)}")
-        for name, path in plan.moves:
-            print(f"  [dry-run] move {name!r} -> {path[-1]!r}")
-        print(f"skipped: {len(plan.skipped)}")
-        for name in plan.skipped:
-            print(f"  [dry-run] already placed {name!r}")
-        print(f"unrecognized: {len(plan.unrecognized)}")
-        for name in plan.unrecognized:
-            print(f"  [dry-run] unrecognized {name!r}")
+        _print_organize_plan(plan)
         return 0
 
-    username = settings.spotify_username
-    if not username:
-        me = spotify.me()
-        username = me.get("id") or ""
-    if not username:
-        raise RuntimeError("could not determine the Spotify username; set SPOTIFY_USERNAME")
-
+    username = _resolve_spotify_username(settings, spotify)
     user_data_dir = settings.spotify_chrome_profile or _default_chrome_profile_dir()
     driver = folders.PlaywrightFolderDriver(
         folders.DriverConfig(
@@ -319,61 +414,15 @@ def _cmd_organize(args: argparse.Namespace) -> int:
     try:
         driver.open()
         folder_map = driver.list_folders()
-        placements = driver.list_placements()
-
-        existing_folders = set(folder_map)
-        # Join the Web API name <-> uri list with the driver's uri -> path map;
-        # only Songipy playlists are interesting, unknown names can be ignored.
-        uri_to_name = {uri: name for name, uri in uri_by_name.items() if uri}
-        existing_placements: dict[str, tuple[str, ...]] = {}
-        for uri, path in placements.items():
-            name = uri_to_name.get(uri)
-            if name is None:
-                continue
-            existing_placements[name] = path or ()
-
+        existing_placements = _build_existing_placements(driver.list_placements(), uri_by_name)
         plan = folder_plan.decide_actions(
             targets,
-            existing_folders=existing_folders,
+            existing_folders=set(folder_map),
             existing_placements=existing_placements,
             nested=False,
             unrecognized=unrecognized,
         )
-
-        folder_name_by_path = {
-            folder_plan.desired_folder_path(target, nested=False): folder_plan.folder_name_for(
-                target, root=config.PLAYLIST_ROOT
-            )
-            for target in targets
-        }
-
-        folder_start_uri_by_path = dict(folder_map)
-        created_folders: list[str] = []
-        for path in plan.create_folders:
-            start_uri = driver.create_folder(path, folder_name_by_path[path])
-            folder_start_uri_by_path[path] = start_uri
-            created_folders.append(path[-1])
-
-        moved: list[tuple[str, str]] = []
-        for name, path in plan.moves:
-            start_uri = folder_start_uri_by_path.get(path)
-            if start_uri is None:
-                raise RuntimeError(f"no start-group URI known for folder path {path!r}")
-            driver.move_playlist(uri_by_name[name], start_uri)
-            moved.append((name, path[-1]))
-
-        for folder_name in created_folders:
-            print(f"created folder {folder_name!r}")
-        for name, folder_name in moved:
-            print(f"moved {name!r} -> {folder_name!r}")
-        print(
-            f"created {len(created_folders)} folder(s), "
-            f"moved {len(moved)} playlist(s), skipped {len(plan.skipped)}"
-        )
-        for name in plan.skipped:
-            print(f"  already placed {name!r}")
-        for name in plan.unrecognized:
-            print(f"  unrecognized {name!r}")
+        _apply_organize_plan(plan, driver, targets, uri_by_name, folder_map)
     finally:
         driver.close()
     return 0

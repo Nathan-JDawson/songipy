@@ -1,0 +1,86 @@
+{
+  "languages": {
+    "python": {}
+  },
+  "rules": [
+    {
+      "id": "comment-quality",
+      "description": "Comments should explain intent, constraints, non-obvious reasoning, surprising behavior, or important context rather than merely restating the adjacent code. Fail comments that closely paraphrase what the code already says without adding useful information. Documentation comments describing public APIs, TODOs with meaningful context, warnings, and explanations of non-obvious algorithms pass.",
+      "severity": "warning",
+      "kinds": ["comment"],
+      "exclude": ["**/tests/**"],
+      "exceptions": [
+        "The comment annotates a dataclass field or typed tuple element and explains its meaning, shape, or bounds.",
+        "The comment explains why a parameter is unused or a feature is intentionally not implemented."
+      ]
+    },
+    {
+      "id": "accurate-doc-comments",
+      "description": "The doc comment accurately describes what the code does. Code with no doc comment passes. Fail when the comment claims behavior the code does not have, promises results the code does not produce, or describes a different purpose.",
+      "severity": "warning",
+      "kinds": ["docComment"]
+    },
+    {
+      "id": "function-control-flow",
+      "description": "Functions should have one clear control-flow responsibility. Fail functions with deeply nested control flow, especially three or more nested decisions or loops, when the nesting represents multiple distinct responsibilities or makes the execution path difficult to follow. Also fail functions with several unrelated branching phases that would be clearer as named helpers. Guard clauses, validation sequences, straightforward retry loops, parsers, state machines, and focused concurrency coordination pass.",
+      "severity": "warning",
+      "kinds": ["function"],
+      "context": {
+        "callees": true
+      }
+    },
+    {
+      "id": "redundant-if-statements",
+      "description": "Fail conditionals whose branches unnecessarily convert a condition directly into a boolean value, duplicate the same outcome, or perform logic that can be expressed more clearly without branching. Examples include returning true or false solely based on an existing boolean condition, or branches that return or assign identical values. Do not fail conditionals with meaningful side effects, distinct error handling, or cases where removing the branch would make the code harder to understand.",
+      "severity": "warning",
+      "kinds": ["function"],
+      "context": {
+        "callees": true
+      },
+      "localize": ["statement"]
+    },
+    {
+      "id": "swallowed-errors",
+      "description": "Fail errors or exceptions that are caught, ignored, discarded, or converted into success without a clear reason. Handling may include recovery, logging with sufficient context, wrapping, propagation, fallback behavior, or an explicitly intentional best-effort operation. Empty catch blocks and discarded errors with no evident justification should fail.",
+      "severity": "error",
+      "kinds": ["function"],
+      "context": {
+        "callees": true
+      },
+      "localize": ["statement"]
+    },
+    {
+      "id": "magic-domain-values",
+      "description": "Fail unexplained literal values when they encode a meaningful domain rule, mode, threshold, timeout, status, sentinel, or business concept and a named constant or type would communicate the meaning better. Obvious values such as zero, one, empty strings, simple loop bounds, formatting literals, and values whose meaning is immediately clear from local context pass.",
+      "severity": "warning",
+      "kinds": ["function"],
+      "context": {
+        "callees": true
+      },
+      "exclude": ["**/tests/**"],
+      "exceptions": [
+        "The literal is an HTTP method, request header name or value, URL scheme, query-string fragment, or API payload field required by an external service or data contract.",
+        "The literal is an empty string or empty container used as an initializer, default, or reset value.",
+        "The literal is a short tag used only to distinguish internal grouping keys within the same module.",
+        "Python's built-in id() is used only to track object identity for objects that remain alive within the same function call."
+      ],
+      "localize": ["statement"]
+    },
+    {
+      "id": "boolean-parameter",
+      "description": "Fail boolean parameters when true and false select substantially different behaviors and the meaning is unclear at the call site. Prefer separate methods, an enum, an options object, or another representation that communicates intent. Boolean parameters representing obvious domain properties such as enabled, recursive, visible, or caseSensitive pass.",
+      "severity": "warning",
+      "kinds": ["function"],
+      "context": {
+        "callees": true
+      }
+    },
+    {
+      "id": "unnecessary-complexity",
+      "description": "The snippet of code is not unnecessarily complicated.",
+      "severity": "warning",
+      "kinds": ["function", "type"],
+      "localize": ["statement"]
+    }
+  ]
+}

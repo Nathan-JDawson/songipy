@@ -42,8 +42,15 @@ PLAYLIST_NAME_FORMAT: dict[str, str] = {
 FOLDER_SUBFOLDERS: tuple[str, ...] = ("Albums", "Genres")
 
 # sync-genres per-album track selection modes and defaults.
-GENRE_TRACK_SELECTION_CHOICES: tuple[str, ...] = ("all", "listened", "popular")
-DEFAULT_GENRE_TRACK_SELECTION = "listened"
+TRACK_SELECTION_ALL = "all"
+TRACK_SELECTION_LISTENED = "listened"
+TRACK_SELECTION_POPULAR = "popular"
+GENRE_TRACK_SELECTION_CHOICES: tuple[str, ...] = (
+    TRACK_SELECTION_ALL,
+    TRACK_SELECTION_LISTENED,
+    TRACK_SELECTION_POPULAR,
+)
+DEFAULT_GENRE_TRACK_SELECTION = TRACK_SELECTION_LISTENED
 DEFAULT_GENRE_MAX_TRACKS_PER_ALBUM = 5
 
 

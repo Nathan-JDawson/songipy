@@ -30,7 +30,7 @@ class FolderPlan:
 
     create_folders: list[tuple[str, ...]]  # ordered, parents before children, deduped
     moves: list[tuple[str, tuple[str, ...]]]  # (playlist name, target path)
-    skipped: list[str]  # already in the right place
+    skipped: list[str]  # already in the right place (current placement equals desired path)
     unrecognized: list[str]  # Songipy-prefixed but not root/<subfolder>/<label>
 
 
@@ -94,6 +94,32 @@ def folder_name_for(
     return f"{root} {target.subfolder}".strip()
 
 
+def _plan_folder_creation(
+    desired_paths: list[tuple[str, ...]],
+    existing_folders: set[tuple[str, ...]],
+    existing_placement_paths: set[tuple[str, ...]],
+) -> list[tuple[str, ...]]:
+    """Return the folder paths that must be created, parents before children.
+
+    A path is skipped when it already exists, was already queued, or equals or
+    prefixes an existing placement: a playlist placed in a folder implies that
+    folder and every ancestor exists, even when ``existing_folders``
+    under-reports them (inconsistent DOM reads).
+    """
+    create_folders: list[tuple[str, ...]] = []
+    seen: set[tuple[str, ...]] = set()
+    for path in desired_paths:
+        for depth in range(1, len(path) + 1):
+            prefix = path[:depth]
+            if prefix in existing_folders or prefix in seen:
+                continue
+            if any(placed[: len(prefix)] == prefix for placed in existing_placement_paths):
+                continue
+            seen.add(prefix)
+            create_folders.append(prefix)
+    return create_folders
+
+
 def decide_actions(
     playlists: list[PlaylistTarget],
     existing_folders: set[tuple[str, ...]],
@@ -127,21 +153,11 @@ def decide_actions(
         else:
             moves.append((target.name, desired))
 
-    create_folders: list[tuple[str, ...]] = []
-    seen: set[tuple[str, ...]] = set()
-    existing_placement_paths = set(existing_placements.values())
-    for path in desired_paths:
-        for depth in range(1, len(path) + 1):
-            prefix = path[:depth]
-            if prefix in existing_folders or prefix in seen:
-                continue
-            # A playlist placed in a folder implies that folder and every
-            # ancestor already exists, even when existing_folders
-            # under-reports them (inconsistent DOM reads).
-            if any(placed[: len(prefix)] == prefix for placed in existing_placement_paths):
-                continue
-            seen.add(prefix)
-            create_folders.append(prefix)
+    create_folders = _plan_folder_creation(
+        desired_paths,
+        existing_folders,
+        set(existing_placements.values()),
+    )
 
     return FolderPlan(
         create_folders=create_folders,
