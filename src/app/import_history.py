@@ -59,7 +59,7 @@ def parse_entry(entry: dict) -> dict | None:
         "album_name": entry.get("master_metadata_album_album_name", entry.get("albumName")),
         "context_uri": entry.get("context"),
         "ms_played": ms_played,
-        "skipped": 1 if entry.get("skipped") else 0,
+        "skipped": 0,
     }
 
 

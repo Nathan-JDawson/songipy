@@ -119,6 +119,9 @@ def group_albums_by_window(
                 )
             )
         albums.sort(key=lambda album: album.name)
-        albums.sort(key=lambda album: _parse_iso(album.last_played_at), reverse=True)
+        albums.sort(
+            key=lambda album: _parse_iso(album.last_played_at) or datetime.min.replace(tzinfo=UTC),
+            reverse=True,
+        )
         plans.append(WindowPlan(spec=spec, albums=albums))
     return plans

@@ -295,10 +295,13 @@ class PlaywrightFolderDriver:
             except TimeoutError:
                 break
         missing = [key for key in _CAPTURED_HEADERS if key not in self._headers]
+        captured = [key for key in _CAPTURED_HEADERS if key in self._headers]
         raise FolderSyncError(
-            f"did not capture all required pathfinder headers ({', '.join(missing)}) "
-            f"on {self._cfg.base_url}; log into the SPOTIFY_CHROME_PROFILE profile "
-            "once manually, then retry"
+            f"did not capture all required pathfinder headers — "
+            f"missing: {', '.join(missing)}; captured: {', '.join(captured) or '(none)'}; "
+            f"page: {self._cfg.base_url}; "
+            "log into the SPOTIFY_CHROME_PROFILE profile once manually, then retry — "
+            "if headers are consistently missing, the Spotify page layout may have changed"
         )
 
     def _api_headers(self, *, has_body: bool) -> dict[str, str]:

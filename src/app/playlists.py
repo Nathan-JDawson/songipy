@@ -12,8 +12,9 @@ logger = logging.getLogger(__name__)
 ADD_TRACKS_BATCH = 100
 
 
-def create_playlist(spotify: Any, name: str) -> str:
-    user_id = api.call_with_retry(spotify.me)["id"]
+def create_playlist(spotify: Any, name: str, *, user_id: str | None = None) -> str:
+    if user_id is None:
+        user_id = api.call_with_retry(spotify.me)["id"]
     playlist = api.call_with_retry(spotify.user_playlist_create, user_id, name, public=True)
     return playlist["id"]
 

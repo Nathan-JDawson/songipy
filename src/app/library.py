@@ -14,8 +14,13 @@ PAGE_SIZE = 50
 TRACKS_BATCH = 50
 
 
-def iter_saved_tracks(spotify: Any) -> Iterator[dict]:
-    """Yield every saved track object (not the wrapper) for the current user."""
+def iter_saved_tracks(spotify: Any, *, limit: int | None = None) -> Iterator[dict]:
+    """Yield every saved track object (not the wrapper) for the current user.
+
+    When *limit* is given, stop after yielding that many tracks (the underlying
+    API pagination is also stopped early).
+    """
+    yielded = 0
     offset = 0
     while True:
         page = api.call_with_retry(
@@ -28,12 +33,15 @@ def iter_saved_tracks(spotify: Any) -> Iterator[dict]:
             track = item.get("track")
             if track:
                 yield track
+                yielded += 1
+                if limit is not None and yielded >= limit:
+                    return
         offset += len(items)
         if not page.get("next"):
             break
 
 
-def iter_album_tracks(spotify: Any, album_id: str) -> list[str]:
+def get_album_tracks(spotify: Any, album_id: str) -> list[str]:
     """Return all track URIs of an album, in the order Spotify returns them."""
     uris: list[str] = []
     offset = 0

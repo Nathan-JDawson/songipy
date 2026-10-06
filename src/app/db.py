@@ -158,8 +158,11 @@ def upsert_listens(db: Database, rows: list[dict[str, Any]]) -> int:
         "ON CONFLICT (played_at, track_uri) DO NOTHING"
     )
     with _cursor(conn) as cur:
-        cur.executemany(sql, values)
-        inserted = cur.rowcount or 0
+        inserted = 0
+        for row in values:
+            cur.execute(sql, row)
+            if cur.rowcount > 0:
+                inserted += 1
     conn.commit()
     return inserted
 

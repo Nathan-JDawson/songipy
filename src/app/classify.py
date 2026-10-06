@@ -183,15 +183,15 @@ def dedupe_album_tracks(
     for track in listened:
         groups.setdefault(_album_group_key(track), []).append(track)
 
-    kept_ids: set[int] = set()
+    kept_uris: set[str] = set()
     for group in groups.values():
         if len(group) <= cap:
-            kept_ids.update(id(track) for track in group)
+            kept_uris.update(track.get("uri") or "" for track in group)
             continue
         if mode == TRACK_SELECTION_LISTENED:
             ranked = _rank_listened(group, listen_stats)
         else:
             ranked = _rank_popular(group)
-        kept_ids.update(id(track) for track in ranked[:cap])
+        kept_uris.update(track.get("uri") or "" for track in ranked[:cap])
 
-    return [track for track in tracks if id(track) in kept_ids]
+    return [track for track in tracks if (track.get("uri") or "") in kept_uris]

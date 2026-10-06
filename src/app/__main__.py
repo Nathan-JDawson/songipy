@@ -50,8 +50,9 @@ def _cmd_auth(args: argparse.Namespace) -> int:
 
 
 def _cmd_import(args: argparse.Namespace) -> int:
-    database = _open_db()
-    count = import_history.import_export(args.path, database)
+    with db_module.Database(config.get_database_url()) as database:
+        db_module.create_schema(database)
+        count = import_history.import_export(args.path, database)
     print(f"Imported {count} listens.")
     return 0
 
@@ -76,12 +77,7 @@ def _cmd_recent(args: argparse.Namespace) -> int:
 
 
 def _saved_tracks(spotify, limit: int | None) -> list[dict]:
-    tracks: list[dict] = []
-    for index, track in enumerate(library.iter_saved_tracks(spotify)):
-        if limit is not None and index >= limit:
-            break
-        tracks.append(track)
-    return tracks
+    return list(library.iter_saved_tracks(spotify, limit=limit))
 
 
 def _dedupe_genre_mapping(mapping: dict[str, list[dict]], mode: str) -> dict[str, list[dict]]:
@@ -97,14 +93,16 @@ def _dedupe_genre_mapping(mapping: dict[str, list[dict]], mode: str) -> dict[str
     }
 
 
-def _create_genre_playlists(spotify: Any, mapping: dict[str, list[dict]], *, dry_run: bool) -> None:
+def _create_genre_playlists(
+    spotify: Any, mapping: dict[str, list[dict]], *, dry_run: bool, user_id: str | None = None
+) -> None:
     """Create (or, for ``dry_run``, print) one playlist per genre."""
     for genre, genre_tracks in sorted(mapping.items()):
         name = config.make_playlist_name("genre", genre)
         if dry_run:
             print(f"[dry-run] {name} ({len(genre_tracks)} tracks)")
             continue
-        playlist_id = playlists_module.create_playlist(spotify, name)
+        playlist_id = playlists_module.create_playlist(spotify, name, user_id=user_id)
         track_uris = [track["uri"] for track in genre_tracks]
         playlists_module.add_tracks(spotify, playlist_id, track_uris)
         print(f"{name} ({len(genre_tracks)} tracks)")
@@ -112,9 +110,10 @@ def _create_genre_playlists(spotify: Any, mapping: dict[str, list[dict]], *, dry
 
 def _cmd_sync_genres(args: argparse.Namespace) -> int:
     spotify = _get_spotify(auth.SCOPES_ALL)
-    tracks = _saved_tracks(spotify, args.top)
+    tracks = _saved_tracks(spotify, getattr(args, "top", None))
     mapping = classify.genre_playlist_map(spotify, tracks)
-    mapping = _dedupe_genre_mapping(mapping, args.tracks)
+    mode = getattr(args, "tracks", config.genre_track_selection())
+    mapping = _dedupe_genre_mapping(mapping, mode)
     kept = classify.keep_min_genres(mapping, config.MIN_PLAYLIST_TRACKS)
     print(
         f"skipped {len(mapping) - len(kept)} genres with fewer than "
@@ -123,7 +122,8 @@ def _cmd_sync_genres(args: argparse.Namespace) -> int:
     if not kept:
         print("No genres found for the saved tracks.")
         return 0
-    _create_genre_playlists(spotify, kept, dry_run=args.dry_run)
+    user_id = api.call_with_retry(spotify.me)["id"] if not getattr(args, "dry_run", False) else None
+    _create_genre_playlists(spotify, kept, dry_run=getattr(args, "dry_run", False), user_id=user_id)
     return 0
 
 
@@ -158,6 +158,7 @@ def _create_album_playlists(
     spotify: Any,
     plans: list[albums.WindowPlan],
     album_id_cache: dict[str, str],
+    user_id: str | None = None,
 ) -> None:
     """Create one playlist per window from the resolved album track lists."""
     album_to_name = {album.key: album.name for plan in plans for album in plan.albums}
@@ -172,12 +173,12 @@ def _create_album_playlists(
                     album_to_name.get(album.key, album.key),
                 )
                 continue
-            track_uris.extend(library.iter_album_tracks(spotify, album_id))
+            track_uris.extend(library.get_album_tracks(spotify, album_id))
         if not track_uris:
             logger.warning("Skipping window with no resolvable tracks: %r", plan.spec.label)
             continue
         name = config.make_playlist_name("albums", plan.spec.label)
-        playlist_id = playlists_module.create_playlist(spotify, name)
+        playlist_id = playlists_module.create_playlist(spotify, name, user_id=user_id)
         playlists_module.add_tracks(spotify, playlist_id, track_uris)
         count = len(plan.albums)
         plural = "" if count == 1 else "s"
@@ -194,16 +195,17 @@ def _cmd_sync_albums(args: argparse.Namespace) -> int:
         print("No albums found in any window.")
         return 0
 
-    if args.top is not None:
+    if getattr(args, "top", None) is not None:
         plans = [replace(plan, albums=plan.albums[: max(0, args.top)]) for plan in plans]
 
-    if args.dry_run:
+    if getattr(args, "dry_run", False):
         _print_album_plans(plans)
         return 0
 
     spotify = _get_spotify(auth.SCOPES_ALL)
+    user_id = api.call_with_retry(spotify.me)["id"]
     album_id_cache = _resolve_album_ids(plans, spotify)
-    _create_album_playlists(spotify, plans, album_id_cache)
+    _create_album_playlists(spotify, plans, album_id_cache, user_id=user_id)
     return 0
 
 
@@ -240,13 +242,13 @@ def _cmd_prune(args: argparse.Namespace) -> int:
         elif any(name.startswith(sub) for sub in subfolder_prefixes):
             targets.append(playlist)
 
-    if args.dry_run:
+    if getattr(args, "dry_run", False):
         print(f"[dry-run] would delete {len(targets)} playlist(s)")
         for playlist in targets:
             print(f"  {playlist.get('name')}")
         return 0
 
-    if not args.yes:
+    if not getattr(args, "yes", False):
         print(
             "Refusing to delete playlists without confirmation: deletion is "
             "permanent. Re-run with --yes to confirm.",
@@ -390,7 +392,9 @@ def _cmd_organize(args: argparse.Namespace) -> int:
     spotify = _get_spotify(auth.SCOPES_ALL)
     targets, uri_by_name, unrecognized = _collect_playlist_targets(spotify)
 
-    if args.dry_run:
+    if getattr(args, "dry_run", False):
+        # NOTE: dry-run does not launch the folder browser, so it cannot see
+        # existing folders/placements.  The plan assumes a clean slate.
         plan = folder_plan.decide_actions(
             targets,
             existing_folders=set(),
@@ -448,18 +452,6 @@ def build_parser() -> argparse.ArgumentParser:
         prog="app",
         description="Generate Spotify playlists from your library and listening history.",
     )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="compute and print playlists without writing to Spotify",
-    )
-    parser.add_argument(
-        "--top",
-        type=int,
-        default=None,
-        help="limit saved tracks (sync-genres) or albums per window (sync-albums)",
-    )
-
     subparsers = parser.add_subparsers(dest="command", metavar="COMMAND")
 
     auth_parser = subparsers.add_parser("auth", help="run interactive Spotify login")
@@ -543,4 +535,4 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    sys.exit(main())
