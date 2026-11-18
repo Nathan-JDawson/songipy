@@ -8,7 +8,7 @@ The project uses your **saved library** (for genre playlists), your **listening 
 
 - **Genre playlists** (`sync-genres`) — your saved tracks grouped by their artists' genres, one timestamped playlist per genre (only genres with ≥ 50 songs).
 - **Date-range album playlists** (`sync-albums`) — every album you've recently listened to, grouped into playlists by time window: `Last 7 Days`, `Last 30 Days`, `Days 8-14`, `Last 90 Days`. Albums play back-to-back, most-recent first.
-- **Listening history** — one-time `import` of your Spotify data export, plus a continuous `poll` that records new plays every few minutes (cloud cron in CI).
+- **Listening history** — one-time `import` of your Spotify data export, plus a continuous `poll` that records new plays every 15 minutes (local cron on the server).
 - **Real folders** (`organize`) — files all `Songipy/…` playlists into real Spotify folders using the web player's internal API (local-only).
 - **Interactive album picker** (`picker`) — a local web app that lists recently-listened albums; pick whole albums, order or shuffle them, preview tracklists, and generate a fresh Spotify playlist (local-only).
 - **Folder-style naming** — all generated playlists are named `Songipy/Albums/…` and `Songipy/Genres/…` so they group together even before `organize` is run.
@@ -68,7 +68,7 @@ uv run python -m app <command> [--dry-run] [--top N]
 |---|---|
 | `auth` | Interactive login; caches the token in `.tokens.json` |
 | `import <path>` | Import a Spotify data export (zip or directory) into the listens DB |
-| `poll` | Fetch recent plays and store new ones (used by CI, runnable locally) |
+| `poll` | Fetch recent plays and store new ones (runs every 15 min via a local cron on the server; GitHub Actions is a manual fallback) |
 | `recent [N]` | Print the last N listens from the DB (default 10) |
 | `sync-genres` | Create per-genre playlists from saved tracks (`--tracks {all,listened,popular}`) |
 | `sync-albums` | Create per-date-window album playlists from recent listens |
@@ -139,9 +139,9 @@ uv run python -m app picker --port 9000 --host 127.0.0.1
 - **`prune --dry-run`** — lists the count and each playlist that would be deleted; no API mutations.
 - **`prune --yes`** — performs the deletion via `current_user_unfollow_playlist`. Deletion is **permanent** (Spotify playlists can't be restored), so the live path refuses to run without `--yes` and exits non-zero.
 
-## Continuous polling (CI)
+## Continuous polling
 
-`.github/workflows/poll.yml` runs `python -m app poll` on a `*/15 * * * *` cron (plus `workflow_dispatch`). It requires GitHub repository secrets:
+`poll` runs every 15 minutes from a local cron on the server (`uv run python -m app poll`, log at `~/.songipy-poll.log`). `.github/workflows/poll.yml` remains as a manual fallback, dispatched with `gh workflow run poll.yml`; it requires the same GitHub repository secrets:
 
 - `SPOTIFY_CLIENT_ID`
 - `SPOTIFY_REFRESH_TOKEN`
