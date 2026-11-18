@@ -75,29 +75,29 @@ def _load_picker_html() -> str:
 # --- password gate -------------------------------------------------------
 
 
-def _sign(nonce: str) -> str:
+def _sign(nonce: str, password: str | None) -> str:
     """Sign a nonce with the picker password as the HMAC key."""
-    secret = (config.get_settings().picker_password or "").encode()
+    secret = (password or "").encode()
     return hmac.new(secret, nonce.encode(), hashlib.sha256).hexdigest()
 
 
-def _valid_token(token: str) -> bool:
+def _valid_token(token: str, password: str | None) -> bool:
     """Return True if *token* carries a valid ``nonce:signature`` signature."""
     if ":" not in token:
         return False
     nonce, sig = token.split(":", 1)
-    return hmac.compare_digest(sig, _sign(nonce))
+    return hmac.compare_digest(sig, _sign(nonce, password))
 
 
-def _require_auth(request: Request) -> None:
+def _require_auth(request: Request, password: str | None) -> None:
     """FastAPI dependency: 401 unless the request carries a valid session cookie.
 
-    When ``PICKER_PASSWORD`` is unset/empty the gate is disabled entirely.
+    When *password* is None/empty the gate is disabled entirely.
     """
-    if not config.get_settings().picker_password:
+    if not password:
         return
     token = request.cookies.get(COOKIE_NAME)
-    if not token or not _valid_token(token):
+    if not token or not _valid_token(token, password):
         raise HTTPException(status_code=401, detail="Not authenticated")
 
 
@@ -193,15 +193,22 @@ def create_app(
     *,
     db: db_module.Database | None = None,
     spotify_factory: Callable[[], Any] | None = None,
+    password: str | None = None,
 ) -> FastAPI:
     """Build the picker FastAPI app.
 
     *db* defaults to the configured production/dev database; pass an in-memory
     SQLite ``Database`` in tests. *spotify_factory* defaults to the real client;
     pass a lambda returning a fake in tests.
+
+    *password* overrides the ``PICKER_PASSWORD`` gate for this app instance:
+    pass ``""`` to disable the gate or a value to enable it regardless of the
+    environment. ``None`` (the default) keeps the ambient behavior: the gate is
+    enabled iff ``PICKER_PASSWORD`` is set.
     """
     database = db if db is not None else _open_default_db()
     get_spotify = spotify_factory or _default_spotify_factory
+    gate_password = password if password is not None else config.get_settings().picker_password
     # In-process cache so repeated track-list expands don't refetch Spotify.
     track_cache: dict[str, list[dict]] = {}
 
@@ -209,19 +216,19 @@ def create_app(
 
     @app.get("/", response_class=HTMLResponse)
     def index(request: Request) -> str:
-        if config.get_settings().picker_password:
+        if gate_password:
             token = request.cookies.get(COOKIE_NAME)
-            if not token or not _valid_token(token):
+            if not token or not _valid_token(token, gate_password):
                 return LOGIN_FORM
         return _load_picker_html()
 
     @app.post("/login")
     def login(password: str = Form(...)) -> RedirectResponse:
-        expected = config.get_settings().picker_password or ""
+        expected = gate_password or ""
         if not expected or not hmac.compare_digest(password.encode(), expected.encode()):
             raise HTTPException(status_code=401, detail="Invalid password")
         nonce = secrets.token_hex(16)
-        token = f"{nonce}:{_sign(nonce)}"
+        token = f"{nonce}:{_sign(nonce, gate_password)}"
         response = RedirectResponse("/", status_code=303)
         response.set_cookie(COOKIE_NAME, token, httponly=True, samesite="lax")
         return response
@@ -234,7 +241,7 @@ def create_app(
 
     @app.get("/api/albums")
     def api_albums(window: int = 30, request: Request = None) -> dict:
-        _require_auth(request)
+        _require_auth(request, gate_password)
         window = window if window in (7, 30, 90) else 30
         listens = db_module.all_listens_ordered(database)
         entries = picker_logic.group_recent_albums(
@@ -281,7 +288,7 @@ def create_app(
 
     @app.get("/api/albums/{album_id}/tracks")
     def api_album_tracks(album_id: str, request: Request = None) -> dict:
-        _require_auth(request)
+        _require_auth(request, gate_password)
         if album_id in track_cache:
             return {"tracks": track_cache[album_id]}
         tracks = _fetch_album_track_objects(get_spotify(), album_id)
@@ -290,7 +297,7 @@ def create_app(
 
     @app.post("/api/generate")
     def api_generate(body: GenerateRequest, request: Request = None) -> dict:
-        _require_auth(request)
+        _require_auth(request, gate_password)
         title = body.title.strip()
         if not title:
             raise HTTPException(status_code=400, detail="title is required")

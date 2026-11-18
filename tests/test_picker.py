@@ -215,8 +215,13 @@ def _seed_db(listens: list[dict]) -> db_module.Database:
     return db
 
 
-def _make_client(db: db_module.Database, spotify: FakeSpotify) -> TestClient:
-    app = picker.create_app(db=db, spotify_factory=lambda: spotify)
+def _make_client(
+    db: db_module.Database, spotify: FakeSpotify, *, password: str | None = ""
+) -> TestClient:
+    # An explicit `password=""` disables the picker gate for this app instance
+    # regardless of the ambient environment, so API tests are hermetic even when
+    # the real `.env` sets PICKER_PASSWORD.
+    app = picker.create_app(db=db, spotify_factory=lambda: spotify, password=password)
     return TestClient(app)
 
 
@@ -335,11 +340,12 @@ def test_generate_requires_albums() -> None:
 # --- auth gate -----------------------------------------------------------
 
 
-def test_auth_gate_blocks_unauth_and_allows_login(monkeypatch) -> None:
-    monkeypatch.setenv("PICKER_PASSWORD", "secret")
+def test_auth_gate_blocks_unauth_and_allows_login() -> None:
+    # The password is passed explicitly to `create_app`, so this test never
+    # depends on the ambient environment (no .env / env var needed or read).
     db = _seed_db(_recent_listens(3))
     spotify = FakeSpotify({}, uri_to_album={})
-    app = picker.create_app(db=db, spotify_factory=lambda: spotify)
+    app = picker.create_app(db=db, spotify_factory=lambda: spotify, password="secret")
     client = TestClient(app)
 
     # Unauthenticated API -> 401.
@@ -367,15 +373,22 @@ def test_auth_gate_blocks_unauth_and_allows_login(monkeypatch) -> None:
     assert client.post("/api/generate", json={"title": "x", "album_ids": ["a"]}).status_code != 401
 
 
-def test_no_password_gate_when_unset(monkeypatch) -> None:
-    monkeypatch.delenv("PICKER_PASSWORD", raising=False)
+def test_no_password_gate_when_unset() -> None:
+    # A gate-less app instance: explicit empty password, no ambient env needed.
     db = _seed_db(_recent_listens(3))
     spotify = FakeSpotify({}, uri_to_album={})
-    app = picker.create_app(db=db, spotify_factory=lambda: spotify)
-    client = TestClient(app)
+    client = _make_client(db, spotify, password="")
     # Root serves the page (not the login form) and API is open.
     assert "Password" not in client.get("/").text
     assert client.get("/api/albums").status_code == 200
+
+
+def test_login_rejected_when_gate_disabled() -> None:
+    # With an empty gate password, /login has nothing to authenticate against.
+    db = _seed_db(_recent_listens(3))
+    spotify = FakeSpotify({}, uri_to_album={})
+    client = _make_client(db, spotify, password="")
+    assert client.post("/login", data={"password": "anything"}).status_code == 401
 
 
 def _cookie_value(resp) -> str:

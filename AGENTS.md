@@ -28,7 +28,7 @@ Spotify playlist generator. Python 3.12, `src/` layout, package `app`.
 ## Data sources / workflows
 
 - Listening history: (1) continuous `poll` reading `recently-played` (rolling last 50), (2) one-time `import <zip|dir>` from the Spotify data export. The real export is `my_spotify_data(3).zip` in the repo root (personal data — gitignored).
-- CI: `.github/workflows/poll.yml` cron `*/15 * * * *`; requires GitHub secrets `SPOTIFY_CLIENT_ID`, `SPOTIFY_REFRESH_TOKEN`, `DATABASE_URL`.
+- CI: `.github/workflows/poll.yml` is dispatch-only (no schedule); the real cadence is a local crontab entry on the server running `uv run python -m app poll` every 15 minutes (log `~/.songipy-poll.log`). Manual runs via `gh workflow run poll.yml` still require GitHub secrets `SPOTIFY_CLIENT_ID`, `SPOTIFY_REFRESH_TOKEN`, `DATABASE_URL`.
 - Playlist generation: `sync-genres` (multi-genre via artist genres), `sync-albums` (recently-listened albums grouped by date-range windows via `app.albums.group_albums_by_window`). Both create fresh timestamped playlists; `--dry-run` writes nothing to Spotify.
 
 ## Folder sync (local only)
