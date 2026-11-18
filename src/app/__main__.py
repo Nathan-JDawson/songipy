@@ -12,6 +12,7 @@ from typing import Any
 
 from app import albums, api, auth, classify, config, folder_plan, folders, import_history, library
 from app import db as db_module
+from app import picker as picker_module
 from app import playlists as playlists_module
 from app import poll as poll_module
 
@@ -381,6 +382,33 @@ def _build_existing_placements(
     return existing
 
 
+def _cmd_picker(args: argparse.Namespace) -> int:
+    """Serve the local album-picker web app until interrupted (Ctrl+C).
+
+    Local-only: it needs a browser on the LAN and a live Spotify session, so it
+    is never run in CI. Picks are not ``Songipy/``-prefixed, so ``organize``
+    won't file them and ``prune`` won't clean them up (intentional).
+    """
+    import socket
+
+    import uvicorn
+
+    host = args.host
+    port = args.port
+    app = picker_module.create_app()
+    loopback = f"http://127.0.0.1:{port}"
+    lan_hint = ""
+    try:
+        lan_ip = socket.gethostbyname(socket.gethostname())
+        if lan_ip and not lan_ip.startswith("127."):
+            lan_hint = f" (LAN: http://{lan_ip}:{port})"
+    except OSError:
+        pass
+    print(f"Serving on {loopback}{lan_hint} — Ctrl+C to stop", flush=True)
+    uvicorn.run(app, host=host, port=port, log_level="info")
+    return 0
+
+
 def _cmd_organize(args: argparse.Namespace) -> int:
     """File Songipy-prefixed playlists into real Spotify folders (local-only).
 
@@ -488,6 +516,15 @@ def build_parser() -> argparse.ArgumentParser:
                 "(rank by track popularity)",
             )
         sub.set_defaults(func=handler)
+
+    picker_parser = subparsers.add_parser(
+        "picker",
+        help="serve the local album-picker web app (choose recently-listened albums "
+        "and generate a playlist)",
+    )
+    picker_parser.add_argument("--host", default="0.0.0.0", help="bind host (default 0.0.0.0)")
+    picker_parser.add_argument("--port", type=int, default=8765, help="bind port (default 8765)")
+    picker_parser.set_defaults(func=_cmd_picker)
 
     prune_parser = subparsers.add_parser(
         "prune",

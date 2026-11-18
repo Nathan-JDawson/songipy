@@ -10,6 +10,7 @@ The project uses your **saved library** (for genre playlists), your **listening 
 - **Date-range album playlists** (`sync-albums`) — every album you've recently listened to, grouped into playlists by time window: `Last 7 Days`, `Last 30 Days`, `Days 8-14`, `Last 90 Days`. Albums play back-to-back, most-recent first.
 - **Listening history** — one-time `import` of your Spotify data export, plus a continuous `poll` that records new plays every few minutes (cloud cron in CI).
 - **Real folders** (`organize`) — files all `Songipy/…` playlists into real Spotify folders using the web player's internal API (local-only).
+- **Interactive album picker** (`picker`) — a local web app that lists recently-listened albums; pick whole albums, order or shuffle them, preview tracklists, and generate a fresh Spotify playlist (local-only).
 - **Folder-style naming** — all generated playlists are named `Songipy/Albums/…` and `Songipy/Genres/…` so they group together even before `organize` is run.
 - **Rate-limit safe** — automatic `429` retry with `Retry-After` backoff on every Spotify API call.
 
@@ -55,6 +56,7 @@ uv run python -m app import "path\to\MyData.zip"
 | `FOLDER_SYNC_HEADLESS` | `1` to run the `organize` browser headless | `0` |
 | `GENRE_TRACK_SELECTION` | `sync-genres` track-selection mode: `all` (no dedupe), `listened` (rank by local listen stats), `popular` (rank by track popularity) | `listened` |
 | `GENRE_MAX_TRACKS_PER_ALBUM` | Max tracks one album may contribute to a genre playlist (`listened`/`popular` modes) | `5` |
+| `PICKER_PASSWORD` | Optional convenience gate for the `picker` web app; unset/empty disables the login requirement | — |
 
 ## Usage
 
@@ -72,6 +74,7 @@ uv run python -m app <command> [--dry-run] [--top N]
 | `sync-albums` | Create per-date-window album playlists from recent listens |
 | `organize` | Move `Songipy/…` playlists into real Spotify folders |
 | `prune` | Delete all `Songipy/…` playlists you own (`--dry-run` to preview; live run requires `--yes`) |
+| `picker` | Serve the interactive album picker web app (local-only) |
 
 Global flags:
 
@@ -114,6 +117,21 @@ The public Spotify Web API has **no folder support**, so `organize` drives the w
 
 > Note: automating the web player's internal API is unofficial and subject to Spotify's terms. Keep usage low-volume and personal.
 
+## Interactive album picker (`picker`, local-only)
+
+`picker` starts a local web app that turns your recent listening into a hand-curated playlist:
+
+```powershell
+uv run python -m app picker                 # serves on http://0.0.0.0:8765
+uv run python -m app picker --port 9000 --host 127.0.0.1
+```
+
+- The page lists albums you've recently listened to from the local DB (≥ 3 distinct tracks played), with a window selector (last 7 / 30 / 90 days). Covers/artists/track counts are fetched live from Spotify.
+- Pick whole albums, reorder them (drag-and-drop, or ↑/↓ on touch), shuffle the *album* order, and preview each album's full tracklist. The playlist title is editable and defaults to `Album picks YYYY-MM-DD HH:MM` (UTC).
+- **Generate** always creates a **new** public playlist in your account. The resulting playlist is **not** `Songipy/`-prefixed, so `organize` won't file it and `prune` won't clean it up — that's intentional: picks are user-curated one-offs.
+- **Auth**: optional `PICKER_PASSWORD`. When set, the page shows a one-time login and all `/api/*` routes return `401` without a session cookie. It is an *inconvenience* gate for a trusted LAN (plain HTTP), not real security; leave it unset for local convenience.
+- **Local-only**: the app needs a live Spotify session (via the normal auth/refresh-token flow) and serves an interactive page, so it must **never** be added to the GitHub Actions poll workflow.
+
 ## Pruning generated playlists (`prune`)
 
 `sync-genres`/`sync-albums` create a fresh timestamped playlist on every run, so they accumulate over time. `prune` deletes every `Songipy/…` playlist you own (when `PLAYLIST_ROOT` is empty it matches the `Albums/…`/`Genres/…` prefixes instead), leaving other playlists untouched.
@@ -147,7 +165,7 @@ uv run pytest -q                   # tests (SQLite only — never a live Postgre
 
 ```
 src/app/
-  __main__.py      # CLI (auth, import, poll, recent, sync-genres, sync-albums, organize, prune)
+  __main__.py      # CLI (auth, import, poll, recent, sync-genres, sync-albums, organize, prune, picker)
   auth.py          # PKCE + refresh-token auth
   db.py            # Postgres/SQLite storage layer (listens table)
   import_history.py# Spotify export parser
@@ -155,6 +173,8 @@ src/app/
   library.py       # saved tracks / album track pagination
   classify.py      # artist genres -> per-genre track lists
   albums.py        # recent-albums grouping by date windows
+  picker.py        # FastAPI app for the interactive album picker (local-only)
+  picker_logic.py  # picker pure logic (album grouping, track flattening)
   folder_plan.py   # playlist-name -> folder mapping (pure)
   rootlist.py      # internal rootlist response parser (pure)
   folders.py       # Playwright driver for the internal rootlist API

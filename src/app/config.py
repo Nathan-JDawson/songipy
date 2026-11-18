@@ -136,6 +136,7 @@ class Settings:
     spotify_chrome_channel: str | None
     spotify_username: str | None
     folder_sync_headless: bool
+    picker_password: str | None
 
 
 def get_settings() -> Settings:
@@ -153,6 +154,9 @@ def get_settings() -> Settings:
         # URLs; when unset `organize` derives it from `spotify.me()["id"]`.
         spotify_username=os.getenv("SPOTIFY_USERNAME") or None,
         folder_sync_headless=_env_bool("FOLDER_SYNC_HEADLESS", default=False),
+        # Optional convenience gate for the `picker` web app (see picker.py).
+        # None/empty disables the login requirement entirely.
+        picker_password=os.getenv("PICKER_PASSWORD") or None,
     )
 
 

@@ -1,0 +1,573 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Songipy Picker</title>
+<style>
+  :root {
+    --bg: #121212;
+    --panel: #181818;
+    --panel-2: #1f1f1f;
+    --border: #2a2a2a;
+    --text: #e8e8e8;
+    --muted: #9a9a9a;
+    --accent: #1db954;
+    --accent-2: #1ed760;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    line-height: 1.4;
+  }
+  a { color: var(--accent-2); }
+  button {
+    font: inherit;
+    color: var(--text);
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: .45rem .8rem;
+    cursor: pointer;
+  }
+  button:hover { border-color: var(--muted); }
+  button.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #0a0a0a;
+    font-weight: 600;
+  }
+  button.primary:hover { background: var(--accent-2); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  input[type="text"] {
+    font: inherit;
+    color: var(--text);
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: .5rem .7rem;
+    width: 100%;
+  }
+
+  .wrap { max-width: 960px; margin: 0 auto; padding: 1.25rem 1rem 3rem; }
+
+  header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .75rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 1.25rem;
+  }
+  header h1 { font-size: 1.25rem; margin: 0 auto 0 0; }
+  .pill-group { display: flex; gap: .35rem; }
+  .pill-group button.selected { background: var(--accent); border-color: var(--accent); color: #0a0a0a; font-weight: 600; }
+  .spacer { flex: 1; }
+  .muted { color: var(--muted); font-size: .85rem; }
+  .muted[type="submit"] { background: none; border: none; padding: 0; cursor: pointer; }
+
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .75rem;
+    align-items: center;
+    margin-bottom: 1.25rem;
+  }
+  .title-field { flex: 2 1 300px; display: flex; align-items: center; gap: .5rem; }
+  .title-field label { color: var(--muted); font-size: .85rem; white-space: nowrap; }
+
+  .summary { font-size: .95rem; margin-left: auto; }
+
+  .selected-strip {
+    display: flex;
+    gap: .5rem;
+    flex-wrap: wrap;
+    padding: .75rem;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 1.5rem;
+    min-height: 3.25rem;
+  }
+  .selected-strip:empty::before {
+    content: "No albums selected — click albums below.";
+    color: var(--muted);
+    font-size: .9rem;
+    align-self: center;
+  }
+  .chip {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: .35rem .5rem;
+    cursor: grab;
+  }
+  .chip.dragging { opacity: .5; }
+  .chip img { width: 34px; height: 34px; border-radius: 4px; object-fit: cover; background: #333; }
+  .chip .name { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .85rem; }
+  .chip .btn-row { display: flex; gap: .2rem; }
+  .chip .btn-row button { padding: .15rem .4rem; font-size: .8rem; }
+  .chip .remove { color: #ff6b6b; }
+  .dnd-hint { color: var(--muted); font-size: .75rem; margin-top: .35rem; }
+
+  .album-list { display: flex; flex-direction: column; gap: .5rem; }
+  .album-row {
+    display: flex;
+    align-items: center;
+    gap: .8rem;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: .6rem .8rem;
+    cursor: pointer;
+    user-select: none;
+  }
+  .album-row:hover { border-color: var(--muted); }
+  .album-row.selected { border-color: var(--accent); background: #16231a; }
+  .album-row img { width: 52px; height: 52px; border-radius: 6px; object-fit: cover; background: #333; }
+  .album-row .info { flex: 1; min-width: 0; }
+  .album-row .title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .album-row .artist { color: var(--muted); font-size: .85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .album-row .meta { text-align: right; font-size: .8rem; color: var(--muted); white-space: nowrap; }
+  .album-row .meta .when { display: block; }
+  .album-row .tracks-btn { font-size: .8rem; white-space: nowrap; }
+  .tracklist {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin: -0.25rem 0 .25rem;
+    padding: .4rem .75rem;
+  }
+  .tracklist .track {
+    display: grid;
+    grid-template-columns: 2.5rem 1fr auto;
+    gap: .5rem;
+    padding: .25rem 0;
+    font-size: .85rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .tracklist .track:last-child { border-bottom: 0; }
+  .tracklist .track .num { color: var(--muted); text-align: right; }
+  .tracklist .track .tart { color: var(--muted); }
+  .empty { color: var(--muted); padding: 2rem; text-align: center; }
+
+  .banner {
+    margin-top: 1rem;
+    padding: .8rem 1rem;
+    border-radius: 8px;
+    font-size: .9rem;
+  }
+  .banner.ok { background: #12271a; border: 1px solid var(--accent); }
+  .banner.err { background: #2a1414; border: 1px solid #ff6b6b; color: #ffb3b3; }
+
+  @media (max-width: 600px) {
+    header h1 { width: 100%; }
+    .summary { margin-left: 0; }
+    .album-row { flex-wrap: wrap; }
+    .album-row .tracks-btn { margin-left: calc(52px + .8rem); }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Songipy Picker</h1>
+    <div class="spacer"></div>
+    <div class="pill-group" role="group" aria-label="Time window">
+      <button data-window="7">7 days</button>
+      <button data-window="30" class="selected">30 days</button>
+      <button data-window="90">90 days</button>
+    </div>
+    <form method="post" action="/logout">
+      <button type="submit" class="muted">logout</button>
+    </form>
+  </header>
+
+  <div class="controls">
+    <div class="title-field">
+      <label for="title">Title:</label>
+      <input type="text" id="title" autocomplete="off" spellcheck="false">
+    </div>
+    <button id="shuffle" title="Re-roll the order of the selected albums">Shuffle order</button>
+    <button id="generate" class="primary">Generate playlist</button>
+  </div>
+  <div class="summary" id="summary">0 albums · 0 tracks</div>
+
+  <div class="muted" id="mode-hint">Order: picked order (click order / drag to reorder)</div>
+
+  <div class="selected-strip" id="strip" aria-label="Selected albums in order"></div>
+  <div class="dnd-hint">Drag chips to reorder; tap ↑/↓ on touch devices.</div>
+
+  <div class="album-list" id="list">
+    <div class="empty" id="loading">Loading albums…</div>
+  </div>
+
+  <div id="banner"></div>
+</div>
+
+<script>
+"use strict";
+
+const state = {
+  window: 30,
+  albums: [],        // rows from GET /api/albums
+  selected: [],      // ordered array of album_id (display/playback order)
+  tracks: {},        // album_id -> track objects fetched lazily
+  expanded: new Set(),
+  dragId: null,
+};
+
+const el = {
+  loading: document.getElementById("loading"),
+  list: document.getElementById("list"),
+  strip: document.getElementById("strip"),
+  summary: document.getElementById("summary"),
+  modeHint: document.getElementById("mode-hint"),
+  title: document.getElementById("title"),
+  generate: document.getElementById("generate"),
+  shuffle: document.getElementById("shuffle"),
+  banner: document.getElementById("banner"),
+};
+
+function utcTitle() {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  return `Album picks ${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+}
+el.title.value = utcTitle();
+
+function fmtDate(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d)) return iso;
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+}
+
+function albumById(id) {
+  return state.albums.find((a) => a.album_id === id);
+}
+
+function selectedAlbums() {
+  return state.selected.map(albumById).filter(Boolean);
+}
+
+function updateSummary() {
+  const albums = selectedAlbums();
+  const trackCount = albums.reduce((sum, a) => sum + (a.track_count || 0), 0);
+  el.summary.textContent = `${albums.length} album${albums.length === 1 ? "" : "s"} · ${trackCount} track${trackCount === 1 ? "" : "s"}`;
+  el.generate.disabled = albums.length === 0;
+}
+
+function showBanner(kind, html) {
+  el.banner.className = `banner ${kind}`;
+  el.banner.innerHTML = html;
+}
+
+function clearBanner() {
+  el.banner.className = "banner";
+  el.banner.innerHTML = "";
+}
+
+// --- album list ---------------------------------------------------------
+
+async function loadAlbums() {
+  el.loading.style.display = "";
+  el.loading.textContent = "Loading albums…";
+  let data;
+  try {
+    const res = await fetch(`/api/albums?window=${state.window}`);
+    if (res.status === 401) { showBanner("err", "Session expired — <a href='/'>log in again</a>."); return; }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    data = await res.json();
+  } catch (err) {
+    el.loading.textContent = "Failed to load albums. Is the server running and DATABASE_URL set?";
+    return;
+  }
+  state.albums = data.albums || [];
+  // drop selections that are no longer in the list
+  const ids = new Set(state.albums.map((a) => a.album_id));
+  state.selected = state.selected.filter((id) => ids.has(id));
+  renderList();
+  renderStrip();
+  updateSummary();
+  clearBanner();
+}
+
+function toggleSelect(albumId) {
+  const idx = state.selected.indexOf(albumId);
+  if (idx >= 0) {
+    state.selected.splice(idx, 1);
+  } else {
+    state.selected.push(albumId); // picked order = click order
+  }
+  renderList();
+  renderStrip();
+  updateSummary();
+}
+
+function renderList() {
+  el.loading.style.display = "none";
+  el.loading.textContent = "";
+  el.list.querySelectorAll(".album-row, .tracklist").forEach((node) => node.remove());
+  for (const album of state.albums) {
+    const row = document.createElement("div");
+    row.className = "album-row" + (state.selected.includes(album.album_id) ? " selected" : "");
+    row.dataset.id = album.album_id;
+    row.addEventListener("click", () => toggleSelect(album.album_id));
+
+    const img = document.createElement("img");
+    img.src = album.cover_url || "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='52' height='52'%3E%3Crect width='52' height='52' fill='%23333'/%3E%3C/svg%3E";
+    img.alt = "";
+
+    const info = document.createElement("div");
+    info.className = "info";
+    const t = document.createElement("div");
+    t.className = "title";
+    t.textContent = album.name;
+    const ar = document.createElement("div");
+    ar.className = "artist";
+    ar.textContent = album.artist || "Unknown artist";
+    info.append(t, ar);
+
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    meta.innerHTML = `${album.track_count || 0} tracks<span class="when">${fmtDate(album.last_played_at)}</span>`;
+
+    const btn = document.createElement("button");
+    btn.className = "tracks-btn";
+    btn.textContent = state.expanded.has(album.album_id) ? "Tracks ▴" : "Tracks ▾";
+    btn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      toggleExpand(album.album_id);
+    });
+
+    row.append(img, info, meta, btn);
+    el.list.appendChild(row);
+    if (state.expanded.has(album.album_id)) {
+      el.list.appendChild(buildTracklist(album.album_id));
+    }
+  }
+}
+
+async function toggleExpand(albumId) {
+  if (state.expanded.has(albumId)) {
+    state.expanded.delete(albumId);
+    renderList();
+    return;
+  }
+  state.expanded.add(albumId);
+  renderList();
+  if (!state.tracks[albumId]) {
+    try {
+      const res = await fetch(`/api/albums/${encodeURIComponent(albumId)}/tracks`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      state.tracks[albumId] = data.tracks || [];
+    } catch (err) {
+      showBanner("err", "Failed to load the tracklist. Try again.");
+    }
+    renderList();
+  }
+}
+
+function buildTracklist(albumId) {
+  const box = document.createElement("div");
+  box.className = "tracklist";
+  const tracks = state.tracks[albumId];
+  if (!tracks) {
+    box.textContent = "Loading…";
+    return box;
+  }
+  if (tracks.length === 0) {
+    box.textContent = "No tracks returned.";
+    return box;
+  }
+  for (const track of tracks) {
+    const row = document.createElement("div");
+    row.className = "track";
+    const num = document.createElement("span");
+    num.className = "num";
+    const disc = track.disc_number && track.disc_number > 1 ? `D${track.disc_number}.` : "";
+    num.textContent = `${disc}${track.track_number ?? ""}`;
+    const name = document.createElement("span");
+    name.textContent = track.name;
+    name.title = track.uri;
+    const artist = document.createElement("span");
+    artist.className = "tart";
+    artist.textContent = track.artist || "";
+    row.append(num, name, artist);
+    box.appendChild(row);
+  }
+  return box;
+}
+
+// --- selected strip (ordered) -------------------------------------------
+
+function renderStrip() {
+  el.strip.querySelectorAll(".chip").forEach((n) => n.remove());
+  state.selected.forEach((id, index) => {
+    const album = albumById(id);
+    if (!album) return;
+    const chip = document.createElement("div");
+    chip.className = "chip";
+    chip.draggable = true;
+    chip.dataset.id = id;
+    chip.addEventListener("dragstart", (ev) => {
+      state.dragId = id;
+      chip.classList.add("dragging");
+      ev.dataTransfer.effectAllowed = "move";
+    });
+    chip.addEventListener("dragend", () => {
+      chip.classList.remove("dragging");
+      state.dragId = null;
+    });
+    chip.addEventListener("dragover", (ev) => {
+      ev.preventDefault();
+      ev.dataTransfer.dropEffect = "move";
+    });
+    chip.addEventListener("drop", (ev) => {
+      ev.preventDefault();
+      reorder(state.dragId, id);
+    });
+
+    const img = document.createElement("img");
+    img.src = album.cover_url || "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='34' height='34'%3E%3Crect width='34' height='34' fill='%23333'/%3E%3C/svg%3E";
+    img.alt = "";
+
+    const name = document.createElement("span");
+    name.className = "name";
+    name.textContent = album.name;
+
+    const buttons = document.createElement("div");
+    buttons.className = "btn-row";
+    const up = document.createElement("button");
+    up.textContent = "↑";
+    up.title = "Move earlier";
+    up.addEventListener("click", () => {
+      if (index > 0) moveBy(id, -1);
+    });
+    const down = document.createElement("button");
+    down.textContent = "↓";
+    down.title = "Move later";
+    down.addEventListener("click", () => {
+      if (index < state.selected.length - 1) moveBy(id, 1);
+    });
+    const remove = document.createElement("button");
+    remove.className = "remove";
+    remove.textContent = "✕";
+    remove.title = "Remove";
+    remove.addEventListener("click", () => toggleSelect(id));
+    buttons.append(up, down, remove);
+
+    chip.append(img, name, buttons);
+    el.strip.appendChild(chip);
+  });
+}
+
+function moveBy(id, delta) {
+  const from = state.selected.indexOf(id);
+  const to = Math.max(0, Math.min(state.selected.length - 1, from + delta));
+  if (from === to) return;
+  state.selected.splice(from, 1);
+  state.selected.splice(to, 0, id);
+  renderStrip();
+  updateSummary();
+}
+
+function reorder(dragId, overId) {
+  if (!dragId || dragId === overId) return;
+  const from = state.selected.indexOf(dragId);
+  const to = state.selected.indexOf(overId);
+  if (from < 0 || to < 0) return;
+  state.selected.splice(from, 1);
+  state.selected.splice(to, 0, dragId);
+  renderStrip();
+  updateSummary();
+}
+
+el.shuffle.addEventListener("click", () => {
+  const arr = state.selected.slice();
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  state.selected = arr;
+  renderStrip();
+  updateSummary();
+  // leave tracks within each album in album order — only the album order is rolled
+  el.modeHint.textContent = "Order: shuffled (Generate uses the current order on screen)";
+});
+
+// --- window selector -----------------------------------------------------
+
+document.querySelectorAll(".pill-group button").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".pill-group button").forEach((b) => b.classList.remove("selected"));
+    btn.classList.add("selected");
+    state.window = Number(btn.dataset.window);
+    loadAlbums();
+  });
+});
+
+// --- generate -------------------------------------------------------------
+
+el.generate.addEventListener("click", async () => {
+  const title = el.title.value.trim();
+  if (!title) {
+    showBanner("err", "Give the playlist a title.");
+    return;
+  }
+  if (state.selected.length === 0) {
+    showBanner("err", "Select at least one album.");
+    return;
+  }
+  clearBanner();
+  el.generate.disabled = true;
+  el.generate.textContent = "Generating…";
+  try {
+    const res = await fetch("/api/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title, album_ids: state.selected }),
+    });
+    if (res.status === 401) {
+      showBanner("err", "Session expired — <a href='/'>log in again</a>.");
+      return;
+    }
+    if (!res.ok) {
+      const detail = await res.text();
+      showBanner("err", `Generation failed (HTTP ${res.status}): ${detail}`);
+      return;
+    }
+    const data = await res.json();
+    showBanner(
+      "ok",
+      `Created <strong>${escapeHtml(title)}</strong> with ${data.track_count} track${data.track_count === 1 ? "" : "s"} — ` +
+      `<a href="${data.url}" target="_blank" rel="noopener">open in Spotify</a>.`
+    );
+  } catch (err) {
+    showBanner("err", `Generation failed: ${err}`);
+  } finally {
+    el.generate.disabled = state.selected.length === 0;
+    el.generate.textContent = "Generate playlist";
+  }
+});
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
+
+loadAlbums();
+</script>
+</body>
+</html>
