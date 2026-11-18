@@ -8,10 +8,14 @@ dependencies = [
     "python-dotenv",
     "psycopg[binary]",
     "playwright>=1.62.0",
+    "fastapi>=0.165.0",
+    "uvicorn>=0.54.0",
+    "python-multipart>=0.0.34",
 ]
 
 [dependency-groups]
 dev = [
+    "httpx>=0.28.1",
     "pytest",
     "ruff",
 ]
